@@ -13,7 +13,7 @@
     "node": ">=20"
   },
   "repository": "github:ayahito09/CZ-Studio-Editor",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*"

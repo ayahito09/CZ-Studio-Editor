@@ -4,7 +4,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { config } from "./config.ts";
+import { config, getSettings } from "./config.ts";
 
 export type ClaudeState = "terhubung" | "belum-login" | "tidak-terpasang" | "memeriksa";
 export interface ClaudeStatus { state: ClaudeState; version?: string; path?: string; detail?: string; checkedAt: number }
@@ -181,6 +181,7 @@ export class ClaudeBridge {
       "--allowedTools", "mcp__cz__*,Read,Glob,Grep",
       // Satu baris: claude.cmd (instalasi npm) dijalankan lewat cmd.exe, yang memutus perintah di baris baru.
       "--append-system-prompt", SYSTEM.replace(/\s*\n\s*/g, " "),
+      ...(getSettings().claudeModel ? ["--model", getSettings().claudeModel] : []),
       ...t.addDirs.filter((d) => existsSync(d)).flatMap((d) => ["--add-dir", d]),
       ...(this.sessionId ? ["--resume", this.sessionId] : []),
     ];

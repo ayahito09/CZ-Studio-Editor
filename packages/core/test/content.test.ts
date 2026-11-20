@@ -146,6 +146,10 @@ test("validasi definisi aset dan template", () => {
   assert.deepEqual(validateAssetDef(def), []);
   assert.ok(validateAssetDef({ ...def, tree: [{ type: "script" }] }).length);
   assert.ok(validateAssetDef({ ...def, id: "../jahat" }).length);
+  // properti yang tak dikenal renderer atau tree yang tak menampilkan apa pun ditolak (aset polos)
+  assert.ok(validateAssetDef({ ...def, tree: [{ type: "rect", background: "#fff" }] }).some((e) => e.includes("background")));
+  assert.ok(validateAssetDef({ ...def, tree: [{ type: "rect", radius: 34 }] }).some((e) => e.includes("tidak menampilkan")));
+  assert.deepEqual(validateAssetDef({ ...def, tree: [{ type: "rect", fill: "$colors.accent", radius: 34, w: 400, h: 120 }] }), []);
   const t: Template = { id: "clean-editing", name: "Clean", version: 1, tokens: { accent: "#143BFF" }, caption: {}, stylePresets: [] };
   assert.deepEqual(validateTemplate(t), []);
   assert.ok(validateTemplate({ ...t, sfx: { woosh: "../../etc" } }).length);

@@ -68,6 +68,34 @@ const isStr = (v: unknown, max = 200) => typeof v === "string" && v.trim().lengt
 const PARAM_TYPES: ParamType[] = ["text", "list", "color", "number", "bool", "select", "image", "icon"];
 export const SAFE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
+/** Properti yang dikenali renderer (packages/composition). Selain ini diabaikan diam-diam, jadi elemennya tampil polos. */
+const BOX_PROPS = ["type", "bind", "children", "x", "y", "w", "h", "opacity", "radius", "fill", "stroke", "strokeWidth", "shadow", "padding", "rotate", "blur", "align"];
+const TEXT_PROPS = ["style", "font", "size", "weight", "color", "lineHeight", "uppercase"];
+const EXTRA_PROPS: Record<ElementType, string[]> = {
+  rect: [], mask: [], stack: ["direction", "gap", "alignItems", "justify"],
+  text: [...TEXT_PROPS, "text"], list: [...TEXT_PROPS, "items", "marker", "gap"],
+  image: ["src", "fit"], video: ["src"], icon: ["size", "color", "d", "char"],
+  shape: ["kind"], "ui-chat": [...TEXT_PROPS, "accent"],
+};
+/** Daftar properti per elemen, dipakai di prompt dan deskripsi alat supaya Claude tidak menebak. */
+export const ELEMENT_PROPS_HELP = `Properti elemen (selain ini diabaikan renderer dan elemen tampil polos): semua elemen: x, y, w, h (px; x/y membuatnya absolut), fill (warna latar), radius, stroke + strokeWidth, shadow (soft|hard|glow|CSS), padding, opacity, rotate, blur, align, bind (nama param). rect/mask/stack: children; rect tanpa w/h di akar = latar penuh aset. stack: direction (row|column), gap, alignItems, justify. text: text atau bind, style (nama textStyles), font, size, weight, color, lineHeight, uppercase. list: items atau bind, marker, gap, + properti teks. image/video: src atau bind, fit. icon: d (path SVG berawalan M, atau emoji/teks) / char, size, color. shape: kind (circle|rect|line|arrow), w, h, fill, stroke, strokeWidth, radius. ui-chat: bind (daftar pesan {from,text}), accent. Warna/angka boleh '$param' atau '$token' (mis. $colors.accent).`;
+
+function visible(el: Record<string, unknown>): boolean {
+  const has = (k: string) => el[k] !== undefined && el[k] !== "" && el[k] !== "none";
+  const own = ((): boolean => {
+    switch (el.type) {
+      case "rect": case "mask": case "stack": return has("fill") || has("stroke");
+      case "text": return has("text") || has("bind");
+      case "list": return has("items") || has("bind");
+      case "image": case "video": return has("src") || has("bind");
+      case "icon": return true;
+      case "shape": return has("fill") || has("stroke");
+      default: return has("bind");
+    }
+  })();
+  return own || (Array.isArray(el.children) && el.children.some((c) => isObj(c) && visible(c)));
+}
+
 function checkTree(els: unknown, path: string, errs: string[], depth = 0) {
   if (!Array.isArray(els)) { errs.push(`${path} bukan daftar`); return; }
   if (depth > 8) { errs.push(`${path} terlalu dalam`); return; }
@@ -75,6 +103,9 @@ function checkTree(els: unknown, path: string, errs: string[], depth = 0) {
     const p = `${path}[${i}]`;
     if (!isObj(el) || !ELEMENT_TYPES.includes(el.type as ElementType)) { errs.push(`${p}: type harus salah satu ${ELEMENT_TYPES.join(", ")}`); return; }
     if (el.bind !== undefined && typeof el.bind !== "string") errs.push(`${p}.bind harus teks`);
+    const ok = [...BOX_PROPS, ...EXTRA_PROPS[el.type as ElementType]];
+    const bad = Object.keys(el).filter((k) => !ok.includes(k));
+    if (bad.length) errs.push(`${p} (${el.type}): properti tidak dikenal ${bad.join(", ")}; yang dikenal: ${ok.join(", ")}`);
     if (el.children !== undefined) checkTree(el.children, p + ".children", errs, depth + 1);
   });
 }
@@ -92,6 +123,7 @@ export function validateAssetDef(d: unknown): string[] {
   }
   if (!isObj(d.layout)) errs.push("layout bukan objek");
   checkTree(d.tree, "tree", errs);
+  if (Array.isArray(d.tree) && !errs.length && !d.tree.some((e) => isObj(e) && visible(e))) errs.push("tree tidak menampilkan apa pun: beri fill/stroke pada rect, text/bind pada text, dst.");
   if (JSON.stringify(d).length > 100_000) errs.push("definisi aset terlalu besar (maks 100 KB)");
   return errs;
 }

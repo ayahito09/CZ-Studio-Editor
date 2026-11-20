@@ -10,8 +10,11 @@ export interface Settings {
   reviewClaude: boolean;
   /** Bahasa transkrip: auto | id | en. */
   txLang: string;
+  /** Model untuk `claude -p`: "" = bawaan Claude Code user, atau alias opus | sonnet | haiku. */
+  claudeModel: string;
 }
-const DEFAULT_SETTINGS: Settings = { reviewClaude: false, txLang: "auto" };
+export const CLAUDE_MODELS = ["", "opus", "sonnet", "haiku"];
+const DEFAULT_SETTINGS: Settings = { reviewClaude: false, txLang: "auto", claudeModel: "" };
 const settingsFile = () => join(config.dataDir, "settings.json");
 
 /** ffmpeg/ffprobe: salinan yang dipasang CZ di folder data dulu, lalu yang ada di PATH. */
@@ -28,6 +31,7 @@ export async function setSettings(changes: Partial<Settings>): Promise<Settings>
   const next = { ...getSettings() };
   if (typeof changes.reviewClaude === "boolean") next.reviewClaude = changes.reviewClaude;
   if (changes.txLang === "auto" || changes.txLang === "id" || changes.txLang === "en") next.txLang = changes.txLang;
+  if (typeof changes.claudeModel === "string" && CLAUDE_MODELS.includes(changes.claudeModel)) next.claudeModel = changes.claudeModel;
   await mkdir(config.dataDir, { recursive: true });
   await writeFile(settingsFile(), JSON.stringify(next, null, 2));
   return next;

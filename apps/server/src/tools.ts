@@ -184,7 +184,7 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: "cz_save_asset_def", description: "Simpan satu definisi aset JSON deklaratif: {id, name, category, version, description, params{nama:{type:text|list|color|number|bool|select|image|icon, default, min, max, options}}, layout{anchor,x,y,w,h,safeArea}, tree[elemen rect|text|image|video|icon|shape|stack|list|mask|ui-chat], in{preset,frames}, out{preset,frames}, sfx{in,out peran}, duration(detik), trigger, source, license}. Nilai '$nama' merujuk parameter lalu token template. Preset animasi: fade, blurRise, blurFade, pop, slideUp, slideDown, slideLeft, slideRight, scaleIn, wipe.",
+    name: "cz_save_asset_def", description: "Simpan satu definisi aset JSON deklaratif: {id, name, category, version, description, params{nama:{type:text|list|color|number|bool|select|image|icon, default, min, max, options}}, layout{anchor,x,y,w,h,safeArea}, tree[elemen rect|text|image|video|icon|shape|stack|list|mask|ui-chat], in{preset,frames}, out{preset,frames}, sfx{in,out peran}, duration(detik), trigger, source, license}. Properti elemen: lihat prompt tugas (properti tak dikenal ditolak). Nilai '$nama' merujuk parameter lalu token template. Preset animasi: fade, blurRise, blurFade, pop, slideUp, slideDown, slideLeft, slideRight, scaleIn, wipe.",
     inputSchema: obj({ def: O }, ["def"]),
     run: async (s, a) => {
       const sk = s.claude.running?.skill;

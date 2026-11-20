@@ -6,20 +6,45 @@ Editor video lokal untuk konten vertikal. Impor video, potong jeda, timeline ala
 - CZ tidak menyimpan API key. Pemakaian AI dihitung ke login Claude-mu.
 - Footage asli tidak diubah: potongan hanya titik in/out.
 
-## Pasang
+## Pasang dari awal
 
-Prasyarat:
+Butuh koneksi internet sekali di awal (±440 MB) dan ±1 GB ruang kosong. Setelah itu CZ jalan tanpa internet, kecuali fitur AI.
 
-1. Node.js 20 atau lebih baru.
-2. Claude Code (opsional, untuk fitur AI). Tanpa Claude, impor, potong, sunting, dan ekspor tetap jalan; masuk ke akunnya lewat tombol *Masuk ke Claude* di CZ.
+**1. Pasang Node.js.** Unduh versi LTS dari [nodejs.org](https://nodejs.org), jalankan pemasangnya, klik *Next* sampai selesai. Cek di PowerShell atau Terminal:
+
+```
+node -v
+```
+
+Harus muncul `v20` atau lebih baru.
+
+**2. Pasang CZ Studio.**
 
 ```
 npm install -g cz-studio
+```
+
+**3. Pasang semua alatnya sekaligus.**
+
+```
 cz install
+```
+
+Satu perintah ini memasang ffmpeg + ffprobe, whisper-cli, model transkrip `small-q5_1`, mesin ekspor Chrome Headless, dan Claude Code bila belum ada. Alat yang sudah ada dilewati, jadi aman dijalankan ulang. Biasanya langkah ini sudah berjalan sendiri di langkah 2; bila belum, CZ juga menyiapkannya di latar saat pertama dibuka.
+
+**4. Buka CZ.**
+
+```
 cz
 ```
 
-`cz install` memasang semua alat sekaligus: ffmpeg + ffprobe (Windows), whisper-cli, model transkrip `small-q5_1`, mesin ekspor Chrome Headless, dan Claude Code bila belum ada (total ±440 MB, sekali saja). Biasanya ini sudah berjalan sendiri saat `npm install`; bila npm melewatinya, CZ menyiapkannya di latar saat pertama dibuka. Di macOS/Linux, ffmpeg dan whisper-cli dipasang lewat paket sistem (`brew install ffmpeg whisper-cpp`). Ekspor pertama mengunduh Chrome Headless sekali (±130 MB).
+Beranda terbuka di browser. Buat proyek, seret video, selesai.
+
+**5. (Opsional) Hubungkan Claude untuk fitur AI.** Tekan *Masuk ke Claude* di beranda, lalu login di jendela yang terbuka. Butuh akun Claude berlangganan (Pro atau Max). Tanpa Claude, impor, potong jeda, sunting, dan ekspor tetap jalan.
+
+Cek semuanya siap dengan `cz doctor`. Perbarui ke versi baru dengan `cz update`.
+
+macOS/Linux: pasang ffmpeg dan whisper-cli lewat paket sistem dulu (`brew install ffmpeg whisper-cpp`), lalu ikuti langkah yang sama.
 
 ## Perintah
 

@@ -13,7 +13,7 @@ export interface RenderJob {
   settings: { width: number; height: number; fps: number; codec: string; range: string; sceneId?: string };
 }
 export interface SetupStep { id: string; label: string; state: "menunggu" | "memeriksa" | "mengunduh" | "siap" | "gagal"; progress: number; note?: string }
-export interface Settings { reviewClaude: boolean; txLang: string }
+export interface Settings { reviewClaude: boolean; txLang: string; claudeModel: string }
 
 export interface SessionState {
   folder: string;

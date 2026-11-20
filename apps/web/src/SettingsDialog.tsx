@@ -28,6 +28,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <option value="en">Inggris</option>
         </select>
       </label>
+      <label className="field">
+        <span>Model Claude</span>
+        <select value={st.claudeModel ?? ""} onChange={(e) => ed.run(() => api.settings({ claudeModel: e.target.value }))}>
+          <option value="">Bawaan Claude Code</option>
+          <option value="opus">Opus (paling cerdas)</option>
+          <option value="sonnet">Sonnet (seimbang)</option>
+          <option value="haiku">Haiku (tercepat)</option>
+        </select>
+      </label>
+      <p className="hint">Dipakai untuk semua tugas Claude: gaya edit, tata otomatis, dan permintaanmu. Berlaku mulai tugas berikutnya.</p>
       <p className="hint">Transkrip dibuat di komputer ini; suaramu tidak dikirim ke mana pun.</p>
     </dialog>
   );

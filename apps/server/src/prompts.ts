@@ -1,5 +1,5 @@
 // Prompt aksi Claude di CZ. Disusun di server supaya UI cukup mengirim jenis aksi.
-import type { Project } from "@cz/core";
+import { ELEMENT_PROPS_HELP, type Project } from "@cz/core";
 
 export const ACTIONS = ["ask", "cuts", "plan", "revise", "auto-assets", "check-render", "generate-skill", "edit-skill", "auto-style"] as const;
 export type Action = (typeof ACTIONS)[number];
@@ -37,8 +37,11 @@ Cek caption terbaca, aset tidak keluar area aman atau menutupi wajah, dan tidak 
     case "generate-skill": return `Baca skill editing di folder ${skill?.dir} (SKILL.md dan referensinya). Ubah menjadi template CZ dan pustaka aset:
 1. cz_save_template: token desain (warna utama/aksen, font, radius, bayangan, area aman), gaya caption, textStyles, preset gaya (kombinasi tata letak + caption + kamera + aset) yang dipakai sebagai opsi per scene, kontrol Kustom, peta SFX (peran → path file di folder skill), aturan otomatis, aturan pemecahan scene, aturan catatan, dan warnings untuk aturan yang tidak bisa dipetakan.
 2. cz_save_asset_def untuk minimal 10 aset (kartu, badge, teks besar, mockup, latar, overlay, transisi, …), JSON deklaratif dari elemen dasar. Isi source/license bila diketahui.
+Aset harus meniru tampilan yang dijelaskan skill, bukan kotak polos: ambil warna, font, radius, bayangan, dan tata letak dari skill lewat token template ($colors.accent, dst.), beri tiap aset ukuran (w/h), fill, radius, shadow/stroke, teks dengan size/weight/color yang nyata, dan param bawaan (default) yang terisi supaya pratinjaunya langsung terlihat. Susun beberapa elemen bertumpuk (mis. kartu + judul + ikon + garis aksen) untuk aset yang kompleks. Pakai hanya properti yang dikenal renderer. ${ELEMENT_PROPS_HELP}
+Bila cz_save_asset_def menjawab "Tidak tersimpan", perbaiki definisinya sesuai pesan lalu simpan ulang; jangan lanjut sebelum semua aset tersimpan.
 Jangan mengubah file skill. Jangan menjalankan skrip skill. ${text}`;
     case "edit-skill": return `Ubah template skill di ${skill?.dir} sesuai permintaan berikut, lalu simpan ulang dengan cz_save_template / cz_save_asset_def (versi baru ${skill?.version}). Baca dulu cz-template.json dan cz-assets/*.json di folder itu.
+${ELEMENT_PROPS_HELP}
 Permintaan: ${text}`;
   }
 }
