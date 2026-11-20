@@ -8,9 +8,10 @@ import { pipeline } from "node:stream/promises";
 import { config } from "./config.ts";
 import { run } from "./media.ts";
 
-export const MODELS = { base: 148, small: 488, medium: 1530 } as const;
+/** Ukuran unduhan (MB). small-q5_1 = model small yang dipadatkan: ketepatan hampir sama, kurang dari separuh ukuran. */
+export const MODELS = { base: 148, "small-q5_1": 190, small: 488, medium: 1530 } as const;
 export type ModelName = keyof typeof MODELS;
-export const DEFAULT_MODEL: ModelName = "small";
+export const DEFAULT_MODEL: ModelName = "small-q5_1";
 
 const exe = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
 const binDir = () => join(config.dataDir, "whisper");
@@ -34,7 +35,7 @@ export async function findWhisper(): Promise<string | null> {
 }
 
 export async function findModel(): Promise<string | null> {
-  for (const name of [DEFAULT_MODEL, "medium", "base"] as ModelName[]) {
+  for (const name of [DEFAULT_MODEL, "small", "medium", "base"] as ModelName[]) {
     const f = join(modelDir(), `ggml-${name}.bin`);
     if (existsSync(f)) return f;
   }
@@ -46,7 +47,8 @@ export async function engineStatus() {
   return { ready: !!bin && !!model, bin, model };
 }
 
-async function download(url: string, dest: string, label: string) {
+/** Unduh ke dest (lewat .part). Tanpa onProgress: kemajuan dicetak ke terminal. */
+export async function download(url: string, dest: string, label: string, onProgress?: (p: number) => void) {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) throw new Error(`Gagal mengunduh ${label} (${res.status})`);
   const total = Number(res.headers.get("content-length") ?? 0);
@@ -55,37 +57,51 @@ async function download(url: string, dest: string, label: string) {
   body.on("data", (c: Buffer) => {
     got += c.length;
     const pct = total ? Math.floor((got / total) * 100) : -1;
+    if (onProgress) { if (total) onProgress(got / total); return; }
     if (pct !== shown && pct % 5 === 0) { shown = pct; process.stdout.write(`\r${label}: ${pct}% `); }
   });
   await pipeline(body, createWriteStream(dest + ".part"));
   await rename(dest + ".part", dest);
-  process.stdout.write(`\r${label}: selesai        \n`);
+  if (!onProgress) process.stdout.write(`\r${label}: selesai        \n`);
 }
 
-/** `cz models install`: model ggml dari Hugging Face dan (di Windows) whisper-cli dari rilis resmi whisper.cpp. */
-export async function installModels(model: ModelName = DEFAULT_MODEL) {
+/** tar bawaan Windows 10+ bisa membuka zip; di sistem lain unzip. */
+export function unzip(zip: string, dir: string) {
+  const r = process.platform === "win32"
+    ? spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", dir], { windowsHide: true })
+    : spawnSync("unzip", ["-oq", zip, "-d", dir]);
+  if (r.status !== 0) throw new Error("Gagal membuka arsip unduhan");
+}
+
+export async function installModel(model: ModelName = DEFAULT_MODEL, onProgress?: (p: number) => void) {
   await mkdir(modelDir(), { recursive: true });
   const mf = join(modelDir(), `ggml-${model}.bin`);
-  if (existsSync(mf)) console.log(`Model ${model} sudah ada: ${mf}`);
-  else await download(`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin`, mf, `Model ${model} (~${MODELS[model]} MB)`);
+  if (!existsSync(mf)) await download(`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin`, mf, `Model ${model} (~${MODELS[model]} MB)`, onProgress);
+  return mf;
+}
 
-  if (await findWhisper()) { console.log("whisper-cli sudah terpasang."); return; }
-  if (process.platform !== "win32") {
-    console.log("Pasang whisper-cli lewat paket sistem (mis. brew install whisper-cpp), lalu jalankan cz doctor.");
-    return;
-  }
+/** whisper-cli resmi dari rilis whisper.cpp (Windows). Sistem lain: paket sistem. */
+export async function installWhisper(onProgress?: (p: number) => void) {
+  if (await findWhisper()) return;
+  if (process.platform !== "win32") throw new Error("Pasang whisper-cli lewat paket sistem (mis. brew install whisper-cpp)");
   const rel = await fetch("https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10").then((r) => r.json()) as { assets?: { name: string; browser_download_url: string }[] }[];
   const asset = rel.flatMap((r) => r.assets ?? []).find((a) => a.name === "whisper-bin-x64.zip");
   if (!asset) throw new Error("Biner whisper.cpp untuk Windows tidak ditemukan di rilis terbaru");
   await mkdir(binDir(), { recursive: true });
   const zip = join(binDir(), "whisper.zip");
-  await download(asset.browser_download_url, zip, "whisper-cli");
-  // tar bawaan Windows 10+ bisa membuka zip.
-  const t = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe"), ["-xf", zip, "-C", binDir()], { windowsHide: true });
-  await rm(zip, { force: true });
-  if (t.status !== 0) throw new Error("Gagal membuka zip whisper.cpp");
-  if (!(await findWhisper())) throw new Error("whisper-cli.exe tidak ada di dalam zip");
-  console.log("whisper-cli terpasang.");
+  await download(asset.browser_download_url, zip, "whisper-cli", onProgress);
+  try { unzip(zip, binDir()); } finally { await rm(zip, { force: true }); }
+  if (!(await findWhisper())) throw new Error("whisper-cli.exe tidak ada di dalam arsip");
+}
+
+/** `cz models install`: model ggml dari Hugging Face dan (di Windows) whisper-cli dari rilis resmi whisper.cpp. */
+/** `cz models install`: model + whisper-cli, kemajuan di terminal. */
+export async function installModels(model: ModelName = DEFAULT_MODEL) {
+  const mf = await installModel(model);
+  console.log(`Model ${model}: ${mf}`);
+  if (await findWhisper()) { console.log("whisper-cli sudah terpasang."); return; }
+  try { await installWhisper(); console.log("whisper-cli terpasang."); }
+  catch (e) { console.log((e as Error).message); }
 }
 
 export interface TxWord { text: string; srcStart: number; srcEnd: number; estimated: boolean }

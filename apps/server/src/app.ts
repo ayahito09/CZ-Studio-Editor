@@ -15,6 +15,7 @@ import { Session } from "./session.ts";
 import { addSkill, forkVersion, getMeta, inventory, listSkills, loadLibrary, skillFile, versionDir } from "./skills.ts";
 import { callTool, toolList } from "./tools.ts";
 import { engineStatus } from "./transcribe.ts";
+import { ensureSetup, setup } from "./setup.ts";
 
 export interface Options { port: number; dataDir: string; webDir: string | null; }
 
@@ -78,7 +79,8 @@ export async function startServer(opts: Options) {
     claude: claudeStatus(),
     settings: getSettings(),
     renders: renderQueue.jobs.slice(-20),
-    busy: !!session?.busy || renderQueue.busy,
+    busy: !!session?.busy || renderQueue.busy || setup.running,
+    setup,
   });
   const switchTo = async (next: Session) => {
     await session?.save();
@@ -221,7 +223,7 @@ export async function startServer(opts: Options) {
     const { mediaId, lang } = body(req);
     if (typeof lang === "string") await setSettings({ txLang: lang });
     const ids = typeof mediaId === "string" ? [mediaId] : s.history.project.media.filter((m) => m.hasAudio).map((m) => m.id);
-    if (!(await engineStatus()).ready) throw bad("Alat pembuat transkrip belum dipasang. Buka Terminal lalu ketik: cz models install");
+    if (!(await engineStatus()).ready) throw bad(setup.running ? "Alat transkrip sedang disiapkan, tunggu sebentar" : "Alat pembuat transkrip belum siap. Buka Terminal lalu ketik: cz setup");
     for (const id of ids) s.transcribe(id);
     return state();
   });
@@ -477,7 +479,8 @@ export async function startServer(opts: Options) {
   const addr = app.server.address();
   if (addr && typeof addr === "object") config.port = addr.port;
   // Port 0 = render dari terminal: jangan timpa konfigurasi MCP server yang mungkin sedang dibuka user.
-  if (opts.port !== 0) { await writeMcpConfig(); void checkClaude(); }
+  // Port 0 = render dari terminal. Selain itu: siapkan alat yang kurang di latar (npm bisa memblokir postinstall).
+  if (opts.port !== 0) { await writeMcpConfig(); void checkClaude(); void ensureSetup(); }
   return {
     url: `http://127.0.0.1:${config.port}`,
     openFolder: async (folder: string) => switchTo(await Session.open(folder)),

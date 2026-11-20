@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,12 @@ export interface Settings {
 }
 const DEFAULT_SETTINGS: Settings = { reviewClaude: false, txLang: "auto" };
 const settingsFile = () => join(config.dataDir, "settings.json");
+
+/** ffmpeg/ffprobe: salinan yang dipasang CZ di folder data dulu, lalu yang ada di PATH. */
+export function toolBin(name: "ffmpeg" | "ffprobe"): string {
+  const local = join(config.dataDir, "ffmpeg", "bin", name + (process.platform === "win32" ? ".exe" : ""));
+  return existsSync(local) ? local : name;
+}
 
 export function getSettings(): Settings {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(readFileSync(settingsFile(), "utf8")) }; }

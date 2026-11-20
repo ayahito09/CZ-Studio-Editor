@@ -11,17 +11,15 @@ Editor video lokal untuk konten vertikal. Impor video, potong jeda, timeline ala
 Prasyarat:
 
 1. Node.js 20 atau lebih baru.
-2. ffmpeg dan ffprobe di PATH (Windows: `winget install Gyan.FFmpeg`).
-3. Claude Code terpasang dan sudah login: jalankan `claude` sekali di terminal. Opsional: tanpa Claude, impor, potong manual, timeline, edit aset, dan render tetap jalan.
+2. Claude Code (opsional, untuk fitur AI). Tanpa Claude, impor, potong, sunting, dan ekspor tetap jalan; masuk ke akunnya lewat tombol *Masuk ke Claude* di CZ.
 
 ```
 npm install -g cz-studio
-cz models install
-cz doctor
+cz install
 cz
 ```
 
-`cz models install` mengunduh model transkrip lokal (whisper.cpp, model `small` ±490 MB) dan, di Windows, biner `whisper-cli`. Render pertama mengunduh Chrome Headless sekali (±130 MB).
+`cz install` memasang semua alat sekaligus: ffmpeg + ffprobe (Windows), whisper-cli, model transkrip `small-q5_1`, mesin ekspor Chrome Headless, dan Claude Code bila belum ada (total ±440 MB, sekali saja). Biasanya ini sudah berjalan sendiri saat `npm install`; bila npm melewatinya, CZ menyiapkannya di latar saat pertama dibuka. Di macOS/Linux, ffmpeg dan whisper-cli dipasang lewat paket sistem (`brew install ffmpeg whisper-cpp`). Ekspor pertama mengunduh Chrome Headless sekali (±130 MB).
 
 ## Perintah
 
@@ -32,7 +30,8 @@ cz
 | `cz new "<folder>" [--title "<judul>"] [--video "<file>"] [--skill <id>]` | Buat proyek |
 | `cz skill add "<folder skill atau .zip>"` | Tambah skill editing |
 | `cz render "<folder proyek>" [--preset 9:16\|1:1\|4:5\|16:9] [--codec h264\|h265\|prores]` | Render tanpa browser |
-| `cz models install [--model base\|small\|medium]` | Pasang model transkrip |
+| `cz install` | Pasang semua alat yang belum ada (sama dengan `cz setup`) |
+| `cz models install [--model small-q5_1\|small\|medium\|base]` | Ganti atau tambah model transkrip |
 | `cz doctor` | Cek Node, ffmpeg, Claude Code, model, port |
 | `cz update` | Perbarui ke versi terbaru |
 

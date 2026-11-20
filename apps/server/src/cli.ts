@@ -14,8 +14,10 @@ const HELP = `CZ Studio
                              buat proyek baru
   cz skill add "<folder skill atau .zip>"
   cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores]
-  cz models install [--model base|small|medium]
+  cz models install [--model small-q5_1|small|medium|base]
                              unduh model transkrip lokal (whisper.cpp)
+  cz install                 pasang semua alat sekaligus: ffmpeg, whisper, model transkrip,
+                             mesin ekspor, dan Claude Code (sama dengan cz setup)
   cz doctor                  cek Node, ffmpeg, Claude Code, model, port
   cz update                  perbarui ke versi terbaru
 
@@ -41,7 +43,7 @@ const { values, positionals } = parseArgs({
 });
 
 const [cmd, arg, arg2] = positionals;
-const COMMANDS = ["open", "new", "skill", "render", "models", "doctor", "update", "mcp"];
+const COMMANDS = ["open", "new", "skill", "render", "models", "doctor", "update", "mcp", "setup", "install"];
 const needsArg = ["open", "new", "skill", "render", "models"];
 if (values.help || (cmd && !COMMANDS.includes(cmd)) || (cmd && needsArg.includes(cmd) && !arg)) {
   console.log(HELP);
@@ -69,8 +71,8 @@ async function main() {
     case "models": {
       if (arg !== "install") { console.log(HELP); process.exit(1); }
       const { installModels, MODELS } = await import("./transcribe.ts");
-      const m = values.model ?? "small";
-      if (!(m in MODELS)) throw new Error("--model harus base, small, atau medium");
+      const m = values.model ?? "small-q5_1";
+      if (!(m in MODELS)) throw new Error("--model harus small-q5_1, small, medium, atau base");
       return installModels(m as keyof typeof MODELS);
     }
     case "skill": {
@@ -82,6 +84,25 @@ async function main() {
       return;
     }
     case "doctor": return doctor();
+    case "install":
+    case "setup": {
+      // Dipanggil juga oleh postinstall npm: tidak boleh menggagalkan pemasangan.
+      if (process.env.CI || process.env.CZ_SKIP_SETUP) { console.log("CZ: pemasangan alat dilewati (CI / CZ_SKIP_SETUP)."); return; }
+      const { ensureSetup, setup } = await import("./setup.ts");
+      console.log("CZ Studio: memasang semua alat (ffmpeg, whisper, model transkrip, mesin ekspor, Claude Code)…");
+      const shown = new Map<string, string>();
+      await ensureSetup(() => {
+        for (const st of setup.steps) {
+          const line = st.state === "mengunduh" ? `mengunduh ${Math.round(st.progress * 100)}%` : st.state;
+          const key = st.state === "mengunduh" ? `mengunduh ${Math.floor(st.progress * 10)}` : st.state;
+          if (shown.get(st.id) !== key && st.state !== "menunggu") { shown.set(st.id, key); console.log(`  ${st.label}: ${line}${st.note ? ` (${st.note})` : ""}`); }
+        }
+      });
+      const failed = setup.steps.filter((x) => x.state === "gagal");
+      console.log(failed.length ? `Sebagian belum terpasang. Coba lagi nanti dengan: cz install` : "Semua alat siap.");
+      for (const st of setup.steps) if (st.state === "siap" && st.note) console.log(`  Catatan ${st.label}: ${st.note}`);
+      return;
+    }
     case "update": {
       console.log("Memperbarui cz-studio lewat npm…");
       const r = spawnSync("npm", ["install", "-g", "cz-studio@latest"], { stdio: "inherit", shell: process.platform === "win32" });
@@ -155,31 +176,19 @@ async function doctor() {
   const major = Number(process.versions.node.split(".")[0]);
   console.log(`CZ Studio ${version}\n`);
   console.log(`${ok(major >= 20)} Node.js ${process.versions.node}${major >= 20 ? "" : "  → butuh Node 20 atau lebih baru"}`);
-  const ff = ver("ffmpeg", ["-version"]);
-  console.log(`${ok(!!ff)} ffmpeg ${ff ? ff.split(" ")[2] : "tidak ditemukan  → pasang ffmpeg dan tambahkan ke PATH (winget install Gyan.FFmpeg)"}`);
-  // ffprobe diuji seperti CZ memakainya: membaca video kecil buatan ffmpeg (bukan sekadar -version).
-  let fpOk = false, fpErr = "";
-  if (ff) {
-    const { mkdtemp, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { probe, run } = await import("./media.ts");
-    const dir = await mkdtemp(join(tmpdir(), "cz-doctor-"));
-    try {
-      const f = join(dir, "uji.mp4");
-      await run("ffmpeg", ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.2", "-pix_fmt", "yuv420p", f]);
-      fpOk = (await probe(f)).width === 64;
-    } catch (e) { fpErr = (e as Error).message.split("\n")[0]; }
-    finally { await rm(dir, { recursive: true, force: true }); }
-  }
-  console.log(`${ok(fpOk)} ffprobe ${fpOk ? "bisa membaca video" : `tidak bisa membaca video${fpErr ? ` (${fpErr})` : ""}  → pasang ffmpeg lengkap (winget install Gyan.FFmpeg)`}`);
+  // Diuji persis seperti CZ memakainya (salinan di folder data CZ dulu, lalu PATH): filter, libx264, dan ffprobe.
+  const { ffmpegWorks } = await import("./setup.ts");
+  const { toolBin } = await import("./config.ts");
+  const ffOk = await ffmpegWorks();
+  console.log(`${ok(ffOk)} ffmpeg dan ffprobe ${ffOk ? `siap (${toolBin("ffmpeg") === "ffmpeg" ? "dari PATH" : "dipasang CZ"})` : "belum siap  → cz setup"}`);
   const { checkClaude } = await import("./claude.ts");
   const c = await checkClaude(true);
   const claudeMsg = { "terhubung": `terhubung (${c.version})`, "belum-login": "belum login  → buka terminal, jalankan claude, lalu login", "tidak-terpasang": "tidak terpasang  → https://claude.com/claude-code", "memeriksa": "" }[c.state];
   console.log(`${ok(c.state === "terhubung")} Claude Code ${claudeMsg}`);
   const { engineStatus } = await import("./transcribe.ts");
   const e = await engineStatus();
-  console.log(`${ok(!!e.bin)} whisper-cli ${e.bin ?? "tidak ditemukan  → cz models install"}`);
-  console.log(`${ok(!!e.model)} Model transkrip ${e.model ? basename(e.model) : "belum dipasang  → cz models install"}`);
+  console.log(`${ok(!!e.bin)} whisper-cli ${e.bin ?? "tidak ditemukan  → cz setup"}`);
+  console.log(`${ok(!!e.model)} Model transkrip ${e.model ? basename(e.model) : "belum dipasang  → cz setup"}`);
   const net = await import("node:net");
   const free = await new Promise<boolean>((res) => { const sv = net.createServer().once("error", () => res(false)).listen(port, "127.0.0.1", () => sv.close(() => res(true))); });
   console.log(`${ok(free)} Port ${port} ${free ? "kosong" : "sedang dipakai (CZ sudah jalan? atau pakai --port)"}`);

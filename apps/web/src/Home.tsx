@@ -25,6 +25,7 @@ export function Home({ g, run }: { g: State; run: Run }) {
         </span>
       </header>
 
+      <SetupStrip g={g} />
       <section className="home__hero">
         <div className="home__intro">
           <h1>Mau bikin video apa hari ini?</h1>
@@ -284,5 +285,24 @@ function ConnectClaude({ g, run }: { g: State; run: Run }) {
         <button className="btn" onClick={recheck} disabled={checking}>{checking ? <><span className="spinner" aria-hidden="true" />Memeriksa…</> : "Cek ulang"}</button>
       </div>
     </section>
+  );
+}
+
+/** Kemajuan pemasangan alat (ffmpeg, whisper, model) yang berjalan otomatis di latar. */
+export function SetupStrip({ g }: { g: State }) {
+  const steps = g.setup?.steps ?? [];
+  const failed = steps.filter((x) => x.state === "gagal");
+  if (!g.setup?.running && !failed.length) return null;
+  const cur = steps.find((x) => x.state === "mengunduh" || x.state === "memeriksa");
+  return (
+    <div className={"setupstrip" + (failed.length && !g.setup.running ? " is-bad" : "")} role="status">
+      {g.setup.running ? <span className="spinner" aria-hidden="true" /> : <Icon name="alert" />}
+      <span>
+        {g.setup.running
+          ? <>Menyiapkan alat sekali saja: <b>{cur?.label ?? "memeriksa"}</b>{cur?.state === "mengunduh" ? ` · ${Math.round(cur.progress * 100)}%` : ""}</>
+          : <>Belum terpasang: {failed.map((x) => x.label).join(", ")}. Buka Terminal lalu ketik <code>cz setup</code>.</>}
+      </span>
+      {g.setup.running && cur?.state === "mengunduh" && <span className="setupstrip__bar"><span style={{ width: `${Math.round(cur.progress * 100)}%` }} /></span>}
+    </div>
   );
 }

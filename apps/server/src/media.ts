@@ -4,6 +4,7 @@ import { createWriteStream } from "node:fs";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join } from "node:path";
 import { PEAKS_PER_SEC, thumbPlan, type Media } from "@cz/core";
+import { toolBin } from "./config.ts";
 
 export const VIDEO_EXT = new Set([".mp4", ".mov", ".mkv", ".webm", ".m4v"]);
 const exists = (p: string) => access(p).then(() => true, () => false);
@@ -54,7 +55,7 @@ export const killAll = () => { for (const c of active) c.kill(); active = new Se
 export function run(cmd: string, args: string[], onStdout?: (chunk: Buffer) => void, onStderr?: (chunk: Buffer) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
-    try { child = spawn(cmd, args, { windowsHide: true }); }
+    try { child = spawn(cmd === "ffmpeg" || cmd === "ffprobe" ? toolBin(cmd) : cmd, args, { windowsHide: true }); }
     catch (e) { return reject(e); }
     active.add(child);
     let out = "", err = "";
@@ -62,7 +63,7 @@ export function run(cmd: string, args: string[], onStdout?: (chunk: Buffer) => v
     child.stderr!.on("data", (d: Buffer) => { err = (err + d).slice(-4000); onStderr?.(d); });
     child.on("error", (e: NodeJS.ErrnoException) => {
       active.delete(child);
-      reject(e.code === "ENOENT" ? new Error(`Alat pengolah video (${cmd}) belum terpasang. Buka Terminal lalu ketik cz doctor untuk petunjuknya.`) : e);
+      reject(e.code === "ENOENT" ? new Error(`Alat pengolah video (${cmd}) belum terpasang. Buka Terminal lalu ketik: cz setup`) : e);
     });
     child.on("close", (code) => {
       active.delete(child);

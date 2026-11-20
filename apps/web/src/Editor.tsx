@@ -321,6 +321,10 @@ function TopBar({ onHelp, onSettings }: { onHelp: () => void; onSettings: () => 
       </div>
       <div className="topbar__spacer" />
       <ClaudePill />
+      {ed.g.setup?.running && (() => {
+        const cur = ed.g.setup.steps.find((x) => x.state === "mengunduh" || x.state === "memeriksa");
+        return <span className="chip chip--busy" title="Alat ini dipasang sekali saja"><span className="spinner" aria-hidden="true" />Menyiapkan {cur?.label.split(" (")[0].toLowerCase() ?? "alat"}{cur?.state === "mengunduh" ? ` ${Math.round(cur.progress * 100)}%` : ""}</span>;
+      })()}
       {busy > 0 && <span className="chip chip--busy"><span className="spinner" aria-hidden="true" />Menyiapkan {busy} video</span>}
       <div className="history" role="group" aria-label="Riwayat">
         <button className="btn btn--icon" disabled={!s.undo} onClick={() => ed.run(api.undo)}

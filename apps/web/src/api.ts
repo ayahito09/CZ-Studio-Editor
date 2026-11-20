@@ -12,6 +12,7 @@ export interface RenderJob {
   progress: number; frames: number; eta: number | null; output?: string; error?: string; note?: string;
   settings: { width: number; height: number; fps: number; codec: string; range: string; sceneId?: string };
 }
+export interface SetupStep { id: string; label: string; state: "menunggu" | "memeriksa" | "mengunduh" | "siap" | "gagal"; progress: number; note?: string }
 export interface Settings { reviewClaude: boolean; txLang: string }
 
 export interface SessionState {
@@ -36,6 +37,7 @@ export interface Recent {
 export interface State {
   session: SessionState | null; recent: Recent[]; defaultDir: string;
   claude: ClaudeStatus; settings: Settings; renders: RenderJob[]; busy: boolean;
+  setup: { running: boolean; steps: SetupStep[] };
 }
 
 export interface SkillMeta { id: string; name: string; description: string; source: string; versions: number[]; addedAt: number; generated: Record<number, boolean> }
