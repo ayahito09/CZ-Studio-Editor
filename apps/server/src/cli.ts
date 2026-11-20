@@ -155,9 +155,23 @@ async function doctor() {
   const major = Number(process.versions.node.split(".")[0]);
   console.log(`CZ Studio ${version}\n`);
   console.log(`${ok(major >= 20)} Node.js ${process.versions.node}${major >= 20 ? "" : "  → butuh Node 20 atau lebih baru"}`);
-  const ff = ver("ffmpeg", ["-version"]), fp = ver("ffprobe", ["-version"]);
+  const ff = ver("ffmpeg", ["-version"]);
   console.log(`${ok(!!ff)} ffmpeg ${ff ? ff.split(" ")[2] : "tidak ditemukan  → pasang ffmpeg dan tambahkan ke PATH (winget install Gyan.FFmpeg)"}`);
-  console.log(`${ok(!!fp)} ffprobe ${fp ? "ada" : "tidak ditemukan"}`);
+  // ffprobe diuji seperti CZ memakainya: membaca video kecil buatan ffmpeg (bukan sekadar -version).
+  let fpOk = false, fpErr = "";
+  if (ff) {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { probe, run } = await import("./media.ts");
+    const dir = await mkdtemp(join(tmpdir(), "cz-doctor-"));
+    try {
+      const f = join(dir, "uji.mp4");
+      await run("ffmpeg", ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.2", "-pix_fmt", "yuv420p", f]);
+      fpOk = (await probe(f)).width === 64;
+    } catch (e) { fpErr = (e as Error).message.split("\n")[0]; }
+    finally { await rm(dir, { recursive: true, force: true }); }
+  }
+  console.log(`${ok(fpOk)} ffprobe ${fpOk ? "bisa membaca video" : `tidak bisa membaca video${fpErr ? ` (${fpErr})` : ""}  → pasang ffmpeg lengkap (winget install Gyan.FFmpeg)`}`);
   const { checkClaude } = await import("./claude.ts");
   const c = await checkClaude(true);
   const claudeMsg = { "terhubung": `terhubung (${c.version})`, "belum-login": "belum login  → buka terminal, jalankan claude, lalu login", "tidak-terpasang": "tidak terpasang  → https://claude.com/claude-code", "memeriksa": "" }[c.state];

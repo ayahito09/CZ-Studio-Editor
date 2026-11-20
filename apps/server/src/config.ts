@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface Settings {
   /** Perubahan Claude masuk sebagai usulan yang diterima/ditolak user. */
@@ -32,6 +33,7 @@ export const config = {
   port: 4317,
   /** Rahasia untuk server MCP: hanya proses yang dijalankan CZ yang boleh memanggil /api/mcp. */
   token: randomBytes(24).toString("hex"),
-  /** Perintah untuk menjalankan CLI ini lagi (server MCP, render): [node, cli.js|cli.ts]. */
-  self: [process.execPath, process.argv[1]] as string[],
+  /** Perintah untuk menjalankan CLI CZ lagi (server MCP untuk Claude): [node, cli.js|cli.ts].
+   *  Dihitung dari lokasi modul ini, bukan process.argv[1], supaya benar walau server dijalankan dari skrip lain. */
+  self: [process.execPath, fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./cli.ts" : "./cli.js", import.meta.url))] as string[],
 };
