@@ -1,0 +1,40 @@
+{
+  "name": "cz-studio",
+  "version": "0.1.0",
+  "description": "Editor video lokal untuk konten vertikal. Semua aksi AI lewat Claude Code milik kamu.",
+  "type": "module",
+  "bin": {
+    "cz": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": "github:ayahito09/CZ-Studio-Editor",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test packages/core/test/",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "vite build apps/web && esbuild apps/server/src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --external:fastify --external:@fastify/static --external:immer --external:@remotion/renderer --external:@remotion/bundler && node scripts/bundle-render.mjs",
+    "prepublishOnly": "npm test && npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.12",
+    "@remotion/renderer": "4.0.545",
+    "fastify": "^5.12.8",
+    "immer": "^11.2.10"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.545",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@cz/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cz/core": "*",
+    "@remotion/player": "4.0.545",
+    "@cz/composition": "*",
+    "remotion": "4.0.545"
+  },
+  "devDependencies": {
+    "@fontsource-variable/funnel-sans": "^5.3.0",
+    "@fontsource/dm-mono": "^5.3.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "vite": "^8.3.8"
+  }
+}

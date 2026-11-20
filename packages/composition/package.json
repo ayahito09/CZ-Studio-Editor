@@ -1,0 +1,11 @@
+{
+  "name": "@cz/composition",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.tsx",
+  "dependencies": {
+    "@cz/core": "*",
+    "remotion": "4.0.545"
+  }
+}
