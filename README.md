@@ -49,18 +49,6 @@ Empat tahap di bilah atas membaca dan menulis proyek yang sama.
 
 Panel Claude (pil di bilah atas) menampilkan antrean, log, dan frame yang dikirim ke Claude. Aktifkan *Tinjau dulu perubahan Claude* di Pengaturan supaya setiap perubahan Claude masuk sebagai usulan yang kamu Terima atau Tolak. Semua perubahan, dari kamu maupun Claude, bisa dibatalkan dengan Ctrl+Z.
 
-## Pengembangan
-
-```
-npm install
-npm run dev        # server :4317 + Vite :5173 (butuh Node 23.6+)
-npm test           # tes packages/core
-npm run typecheck
-npm run build      # dist/cli.js, dist/web, dist/render-bundle
-```
-
-Spesifikasi: [docs/SPEC.md](docs/SPEC.md). Aturan kode: [CLAUDE.md](CLAUDE.md).
-
 ## Lisensi pihak ketiga
 
 Render memakai [Remotion](https://remotion.dev/license): gratis untuk individu dan tim hingga 3 orang. Baca syaratnya sebelum membagikan CZ Studio ke pihak lain. Font dan SFX dari skill membawa lisensinya masing-masing.
