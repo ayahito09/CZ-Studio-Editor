@@ -1,22 +1,43 @@
 # CZ Studio
 
-Editor video lokal untuk konten vertikal. Impor video, potong jeda, timeline ala Premiere, plan per scene, pustaka aset dari skill editing, edit aset langsung di video, lalu render. Semua aksi AI dijalankan oleh Claude Code milikmu sendiri.
+Editor video lokal untuk konten vertikal (Reels, TikTok, Shorts), dipasang lewat npm dan dibuka di browser. Impor video, potong jeda dan transkrip otomatis, susun per bagian, tambah subtitle, elemen bergerak, dan kamera, lalu ekspor. Fitur AI dijalankan oleh **Claude Code milikmu sendiri**.
 
-- Footage, proyek, dan hasil render tidak pernah keluar dari komputer.
-- CZ tidak menyimpan API key. Pemakaian AI dihitung ke login Claude-mu.
-- Footage asli tidak diubah: potongan hanya titik in/out.
+- **Lokal penuh.** Server hanya berjalan di `127.0.0.1`. Footage, proyek, dan hasil ekspor tidak keluar dari komputermu.
+- **Tanpa API key.** CZ tidak menyimpan kunci apa pun dan tidak punya server AI. Pemakaian AI dihitung ke login Claude-mu.
+- **Footage asli tidak diubah.** Potongan hanya titik masuk dan keluar.
+- **Semua bisa dibatalkan** dengan Ctrl+Z, baik perubahan darimu maupun dari Claude.
 
-## Pasang dari awal
+![Beranda CZ Studio: daftar proyek, pembuat proyek, dan cara pasang](docs/images/beranda.jpg)
 
-Butuh koneksi internet sekali di awal (±440 MB) dan ±1 GB ruang kosong. Setelah itu CZ jalan tanpa internet, kecuali fitur AI.
+## Fitur
 
-**1. Pasang Node.js.** Unduh versi LTS dari [nodejs.org](https://nodejs.org), jalankan pemasangnya, klik *Next* sampai selesai. Cek di PowerShell atau Terminal:
+- **Otomatis saat video masuk:** transkrip per kata (whisper.cpp), potong jeda, subtitle per kata, dan deteksi wajah.
+- **Timeline ala Premiere:** magnet, penanda, tanda masuk/keluar, gunting, geser isi klip, dan zoom linimasa.
+- **Rencana per bagian:** video dibagi per konteks, lengkap dengan gaya, catatan revisi, dan riwayat.
+- **Elemen bergerak:** kartu UI, judul kinetik, mockup chat, B-roll, badge, dan lainnya. Semuanya berupa kode yang bergerak, bukan gambar, dan bisa digeser langsung di pratinjau.
+- **Kamera dan gerak:** setiap gerakan masuk, bertahan, lalu keluar. Bisa diatur manual, otomatis dari isi ucapan dan posisi wajah, atau lewat Claude.
+- **Area aman atas dan bawah:** pelindung teks berupa gradasi gelap, blur, atau kontras, dengan kekuatan dan tinggi yang bisa diatur.
+- **Teks dan elemen di belakang kepala:** orang di video menutupi elemen atau subtitle, memakai potongan subjek yang dibuat CZ.
+- **Gaya edit dari skill:** skill membawa komposisi, menu kustom, dan aset sendiri. Gaya apa pun bisa diterapkan ke semua bagian sekaligus.
+- **Ekspor:** MP4 (H.264 atau H.265) dan MOV ProRes, beberapa rasio layar, motion blur, dan suara diratakan ke −14 LUFS.
+
+## Yang wajib ada
+
+| Kebutuhan | Keterangan |
+| --- | --- |
+| **Sistem operasi** | Windows 10/11 (didukung penuh). macOS dan Linux belum diuji; ffmpeg dan whisper-cli harus dipasang manual |
+| **Node.js** | versi 20 atau lebih baru |
+| **Python** | 3.10 sampai 3.13, untuk deteksi wajah dan potongan subjek. Tanpa Python, fitur itu tidak aktif, yang lain tetap jalan |
+| **Ruang dan koneksi** | sekitar 650 MB unduhan sekali di awal dan ±1 GB ruang kosong. Setelah itu CZ jalan tanpa internet, kecuali fitur AI |
+| **Akun Claude** (opsional) | langganan Pro atau Max untuk fitur AI. Tanpa Claude, impor, potong jeda, sunting, dan ekspor tetap jalan |
+
+## Pasang
+
+**1. Pasang Node.js** (versi LTS) dari [nodejs.org](https://nodejs.org). Cek di PowerShell atau Terminal:
 
 ```
 node -v
 ```
-
-Harus muncul `v20` atau lebih baru.
 
 **2. Pasang CZ Studio.**
 
@@ -24,13 +45,15 @@ Harus muncul `v20` atau lebih baru.
 npm install -g cz-studio
 ```
 
-**3. Pasang semua alatnya sekaligus.**
+**3. Pasang semua alatnya.**
 
 ```
 cz install
 ```
 
-Satu perintah ini memasang ffmpeg + ffprobe, whisper-cli, model transkrip `small-q5_1`, mesin ekspor Chrome Headless, dan Claude Code bila belum ada. Alat yang sudah ada dilewati, jadi aman dijalankan ulang. Biasanya langkah ini sudah berjalan sendiri di langkah 2; bila belum, CZ juga menyiapkannya di latar saat pertama dibuka.
+Perintah ini memasang ffmpeg dan ffprobe, whisper-cli beserta model transkrip, aset bawaan, mesin ekspor (Chrome Headless), mesin skrip Python dengan modelnya (wajah dan potongan subjek), dan Claude Code. Alat yang sudah ada dilewati, jadi aman dijalankan ulang.
+
+Dua langkah akan **bertanya dulu** sebelum mengubah komputermu: memasang Python lewat winget (bila belum ada) dan memasang Claude Code secara global lewat npm. Jawab `y` untuk setuju. Pemasangan otomatis lewat `npm install` tidak pernah menyetujuinya sendiri.
 
 **4. Buka CZ.**
 
@@ -40,11 +63,13 @@ cz
 
 Beranda terbuka di browser. Buat proyek, seret video, selesai.
 
-**5. (Opsional) Hubungkan Claude untuk fitur AI.** Tekan *Masuk ke Claude* di beranda, lalu login di jendela yang terbuka. Butuh akun Claude berlangganan (Pro atau Max). Tanpa Claude, impor, potong jeda, sunting, dan ekspor tetap jalan.
+**5. (Opsional) Hubungkan Claude.** Tekan *Masuk ke Claude* di beranda dan login di jendela yang terbuka.
 
-Cek semuanya siap dengan `cz doctor`. Perbarui ke versi baru dengan `cz update`.
+Cek semuanya dengan `cz doctor`, dan perbarui dengan `cz update`.
 
-macOS/Linux: pasang ffmpeg dan whisper-cli lewat paket sistem dulu (`brew install ffmpeg whisper-cpp`), lalu ikuti langkah yang sama.
+### Keamanan pemasangan
+
+Semua unduhan alat lewat HTTPS dan **diverifikasi SHA-256 beserta ukurannya**. File yang tidak cocok langsung dibuang dan pemasangan berhenti dengan pesan jelas. ffmpeg dan whisper-cli dikunci ke satu rilis tertentu, dan paket Python dibatasi sampai versi mayor berikutnya.
 
 ## Perintah
 
@@ -54,25 +79,63 @@ macOS/Linux: pasang ffmpeg dan whisper-cli lewat paket sistem dulu (`brew instal
 | `cz open "<folder proyek>"` | Buka proyek |
 | `cz new "<folder>" [--title "<judul>"] [--video "<file>"] [--skill <id>]` | Buat proyek |
 | `cz skill add "<folder skill atau .zip>"` | Tambah skill editing |
-| `cz render "<folder proyek>" [--preset 9:16\|1:1\|4:5\|16:9] [--codec h264\|h265\|prores]` | Render tanpa browser |
+| `cz render "<folder proyek>" [--preset 9:16\|1:1\|4:5\|16:9] [--codec h264\|h265\|prores]` | Ekspor tanpa browser |
 | `cz install` | Pasang semua alat yang belum ada (sama dengan `cz setup`) |
 | `cz models install [--model small-q5_1\|small\|medium\|base]` | Ganti atau tambah model transkrip |
 | `cz doctor` | Cek Node, ffmpeg, Claude Code, model, port |
 | `cz update` | Perbarui ke versi terbaru |
 
-Opsi umum: `--port 4317`, `--no-open`, `--data "<folder data>"` (bawaan `%USERPROFILE%\.cz-studio`).
+Opsi umum: `--port 4317`, `--no-open`, `--data "<folder data>"` (bawaan `%USERPROFILE%\.cz-studio`). Folder data terpisah berguna untuk mencoba CZ dari nol tanpa menyentuh data yang ada.
 
 ## Alur kerja
 
-Empat tahap di bilah atas membaca dan menulis proyek yang sama.
+Empat tahap di rel kiri membaca dan menulis proyek yang sama.
 
-1. **Bahan.** Seret video ke editor; pratinjau, gambar mini, dan transkrip per kata disiapkan di latar. Panel *Potong jeda*: tekan *Cari jeda*, tinjau (merah = jeda, kuning = kata pengisi, kata diulang, atau saran Claude), *Putar dengan potongan*, lalu *Potong sekarang*. Di tab *Transkrip*, menghapus kata ikut memotong video di bagian itu.
-2. **Rencana.** *Buat rencana dengan Claude* membagi video per bagian dengan tiga pilihan tampilan. Pilih satu untuk memasang elemennya, tulis catatan (teks + hingga 6 gambar), lalu *Kerjakan catatan dengan Claude*.
-3. **Sunting.** Seret folder atau .zip gaya edit ke panel kiri, tekan *Siapkan gaya dengan Claude*, lalu seret elemen ke pratinjau atau linimasa. Klik elemen di pratinjau untuk menggeser, mengubah ukuran/putaran, atau klik dua kali untuk mengetik.
-4. **Ekspor.** Pilih bentuk layar, jenis file, kualitas, dan bagian yang diekspor. CZ memeriksa catatan yang belum selesai, file yang hilang, dan elemen yang keluar batas aman sebelum mengekspor. Hasil masuk folder `render/` proyek.
+### 1. Bahan
 
-Panel Claude (pil di bilah atas) menampilkan antrean, log, dan frame yang dikirim ke Claude. Aktifkan *Tinjau dulu perubahan Claude* di Pengaturan supaya setiap perubahan Claude masuk sebagai usulan yang kamu Terima atau Tolak. Semua perubahan, dari kamu maupun Claude, bisa dibatalkan dengan Ctrl+Z.
+Seret video. Pratinjau, transkrip, potong jeda, subtitle, dan deteksi wajah berjalan otomatis di latar. Tinjau usulan potongan, lalu potong. Menghapus kata di transkrip ikut memotong videonya.
 
-## Lisensi pihak ketiga
+![Tahap Bahan: potong jeda dan transkrip per kata](docs/images/bahan.jpg)
 
-Render memakai [Remotion](https://remotion.dev/license): gratis untuk individu dan tim hingga 3 orang. Baca syaratnya sebelum membagikan CZ Studio ke pihak lain. Font dan SFX dari skill membawa lisensinya masing-masing.
+### 2. Rencana
+
+Bagi video per konteks, sendiri atau dengan Claude. Atur tampilan, teks, efek suara, dan catatan tiap bagian.
+
+![Tahap Rencana: daftar bagian dan pengaturannya](docs/images/rencana.jpg)
+
+### 3. Sunting
+
+Pilih gaya edit, seret elemen ke pratinjau atau linimasa, lalu atur kamera, area aman, dan posisi elemen.
+
+![Tahap Sunting: pustaka elemen, pratinjau, kamera dan gerak, serta linimasa](docs/images/sunting.jpg)
+
+### 4. Ekspor
+
+Pilih format, kualitas, dan rentang. CZ memeriksa catatan yang belum selesai dan elemen yang keluar batas aman sebelum mulai. Hasil masuk folder `render/` proyek.
+
+![Tahap Ekspor: format, kualitas, rentang, dan hasil](docs/images/ekspor.jpg)
+
+## Lisensi
+
+CZ Studio dirilis dengan **lisensi MIT**. Lihat [LICENSE](LICENSE). Hak cipta © 2026 Azmi.
+
+### Terima kasih dan lisensi pihak ketiga
+
+CZ Studio berdiri di atas karya banyak orang. Mohon hormati lisensi mereka, terutama bila kamu membagikan atau memakainya secara komersial. Daftar ini ringkasan, jadi baca lisensi resmi di sumbernya untuk syarat lengkap dan terbaru.
+
+| Komponen | Pembuat | Lisensi | Catatan |
+| --- | --- | --- | --- |
+| [Remotion](https://remotion.dev) | Remotion | Lisensi Remotion | **Syarat khusus.** Gratis untuk individu dan tim kecil. Perusahaan di atas batas yang ditentukan wajib membeli lisensi. Baca [remotion.dev/license](https://remotion.dev/license) sebelum memakai CZ Studio di perusahaan atau membagikannya |
+| Kit gerak (`packages/composition/src/motion`) | Yahia Zahran (Zahran Motion) | MIT | Lisensi asli ada di [LICENSE-zahran-ui-motion.txt](packages/composition/src/motion/LICENSE-zahran-ui-motion.txt) |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) dan model Whisper | Georgi Gerganov dan kontributor, OpenAI | MIT | transkrip lokal |
+| [FFmpeg](https://ffmpeg.org) | Proyek FFmpeg. Build Windows dari [GyanD/codexffmpeg](https://github.com/GyanD/codexffmpeg) | LGPL/GPL (build *essentials* berlisensi GPL) | diunduh `cz install`, tidak disertakan di repo |
+| [OpenCV](https://opencv.org) dan model YuNet ([opencv_zoo](https://github.com/opencv/opencv_zoo)) | OpenCV, Shiqi Yu | Apache-2.0 (OpenCV), MIT (YuNet) | deteksi wajah |
+| [U²-Net](https://github.com/xuebinqin/U-2-Net) (bobot lewat [rembg](https://github.com/danielgatis/rembg)) | Xuebin Qin, Daniel Gatis | Apache-2.0 (U²-Net), MIT (rembg) | potongan subjek |
+| [ONNX Runtime](https://onnxruntime.ai), [NumPy](https://numpy.org), [Pillow](https://python-pillow.org), [SoundFile](https://github.com/bastibe/python-soundfile) | Microsoft, komunitas masing-masing | MIT, BSD, HPND, BSD | paket Python |
+| [Fastify](https://fastify.dev), [esbuild](https://esbuild.github.io), [Immer](https://immerjs.github.io/immer/), [React](https://react.dev), [Vite](https://vitejs.dev) | komunitas masing-masing | MIT | pustaka program |
+| Font bawaan | [Google Fonts](https://github.com/google/fonts) dan perancangnya | SIL OFL 1.1 | diunduh `cz install` |
+| [Claude Code](https://claude.com/claude-code) | Anthropic | Ketentuan Anthropic | opsional, dipasang dan dimasuki akunnya oleh pengguna |
+
+Efek suara dan font yang dibawa sebuah skill tunduk pada lisensi skill itu. Kalau kamu membuat atau membagikan skill, cantumkan lisensi dan pembuat aset di dalamnya.
+
+Kalau ada karya yang dipakai di sini tetapi belum tercantum dengan benar, atau lisensinya salah ditulis, buka *issue* dan akan segera diperbaiki.
