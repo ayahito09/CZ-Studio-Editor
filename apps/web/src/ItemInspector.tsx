@@ -1,12 +1,25 @@
+import { BehindHead } from "./BehindHead.tsx";
 import { useEffect, useState } from "react";
-import { paramValues, type AssetInstance, type Caption, type CaptionStyle, type Op, type ParamDef, type WordStyle } from "@cz/core";
-import { ANIM_PRESETS, transformAt } from "@cz/composition";
+import { BUILTIN_ASSETS, CAPTION_LAYOUTS, fullScale, instantiate, KEY_ACCENTS, paramValues, placementY, type Placement, type AssetDef, type AssetInstance, type Caption, type CaptionStyle, type Op, type ParamDef, type WordStyle } from "@cz/core";
+import { ANIM_PRESETS, AnimPreview, CaptionPreview, transformAt } from "@cz/composition";
 
 /** Nama gerakan untuk user. */
 export const ANIM_LABEL: Record<string, string> = {
   fade: "Memudar", blurRise: "Naik dari buram", blurFade: "Buram memudar", pop: "Meletup", slideUp: "Masuk dari bawah",
   slideDown: "Masuk dari atas", slideLeft: "Masuk dari kanan", slideRight: "Masuk dari kiri", scaleIn: "Membesar", wipe: "Tersapu",
 };
+const animChoices = (dir: "in" | "out"): Choice[] => [{ id: "", label: "Tidak ada" },
+  ...ANIM_PRESETS.map((p) => ({ id: p, label: ANIM_LABEL[p] ?? p, preview: miniPlayer(AnimPreview, { preset: p, dir, width: 320, height: 180 }) }))];
+const ANIM_CHOICES = { in: animChoices("in"), out: animChoices("out") };
+const capPreview = (p: Partial<{ activeEffect: string; inPreset: string }>) => miniPlayer(CaptionPreview, { ...p, width: 640, height: 360 } as never);
+const HIGHLIGHT_CHOICES: Choice[] = [
+  ["pil", "Pil"], ["garis", "Garis bawah"], ["glow", "Glow"], ["warna", "Berwarna"], ["skala", "Membesar"], ["tidak", "Tidak ditandai"],
+].map(([id, label]) => ({ id, label, preview: capPreview({ activeEffect: id }) }));
+const CAPTION_IN_CHOICES: Choice[] = [["springRise", "Pegas naik"], ...ANIM_PRESETS.map((p) => [p, ANIM_LABEL[p] ?? p]), ["none", "Langsung"]]
+  .map(([id, label]) => ({ id, label, preview: capPreview({ inPreset: id, activeEffect: "tidak" }) }));
+const LAYOUT_CHOICES: Choice[] = CAPTION_LAYOUTS.map((l) => ({ id: l.id, label: l.label, preview: miniPlayer(CaptionPreview, { layout: l.id, width: 640, height: 360 }) }));
+const ACCENT_CHOICES: Choice[] = [{ id: "", label: "Ikuti gaya per kata" },
+  ...KEY_ACCENTS.map((a) => ({ id: a.id, label: a.label, preview: miniPlayer(CaptionPreview, { keyAccent: a.id, width: 640, height: 360 }) }))];
 /** Nama isi elemen yang umum dalam bahasa sehari-hari; selain itu dipakai apa adanya. */
 const PARAM_LABEL: Record<string, string> = {
   title: "Judul", subtitle: "Subjudul", text: "Teks", lines: "Baris", items: "Daftar", width: "Lebar", height: "Tinggi", size: "Ukuran",
@@ -15,6 +28,7 @@ const PARAM_LABEL: Record<string, string> = {
 };
 const paramLabel = (name: string, def: ParamDef) => def.label ?? PARAM_LABEL[name] ?? name.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
 import { useEd } from "./ed.ts";
+import { EffectPicker, miniPlayer, type Choice } from "./EffectPicker.tsx";
 import { Icon } from "./icons.tsx";
 import { timecode } from "./store.ts";
 
@@ -63,15 +77,29 @@ function ParamField({ name, def, value, onChange }: { name: string; def: ParamDe
       return <label className="check"><input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} /><span>{label}</span></label>;
     case "select":
       return <label className="field field--inline"><span>{label}</span><select value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>{def.options?.map((o) => <option key={o}>{o}</option>)}</select></label>;
+    case "media":
+      return <MediaField label={label} value={String(value ?? "")} onChange={onChange} />;
     default:
       return <Field label={label} value={String(value ?? "")} onCommit={onChange} />;
   }
 }
 
+/** Pilih video proyek (untuk B-roll). */
+function MediaField({ label, value, onChange }: { label: string; value: string; onChange: (v: unknown) => void }) {
+  const ed = useEd();
+  return (
+    <label className="field field--inline"><span>{label}</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Pilih video</option>
+        {ed.project.media.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select></label>
+  );
+}
+
 export function AssetInspector({ a }: { a: AssetInstance }) {
   const ed = useEd();
   const fps = ed.project.sequence.fps;
-  const def = a.defId ? ed.lib?.assets.find((d) => d.id === a.defId) : undefined;
+  const def = a.defId ? ed.assetDefs.find((d) => d.id === a.defId) : undefined;
   const params = paramValues(def, a.params);
   const set = (changes: Record<string, unknown>) => ed.op({ type: "updateAsset", id: a.id, changes } as Op);
   const schema: Record<string, ParamDef> = def?.params ?? { text: { type: "text", label: "Teks" } };
@@ -83,6 +111,8 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
   return (
     <>
       <h2 id="insp-h" className="panel__title">{def?.name ?? (a.defId ? "Elemen ini sudah tidak ada di gaya edit" : "Teks bebas")}</h2>
+      <BehindHead start={a.start} end={a.start + a.duration} on={a.params.behindHead === true} locked={a.locked}
+        onChange={(v) => set({ params: { ...a.params, behindHead: v || undefined } })} />
       <div className="row row--wrap">
         <button className={"btn btn--chip" + (a.locked ? " is-on" : "")} aria-pressed={a.locked} onClick={() => set({ locked: !a.locked })} title="Dikunci: Claude tidak akan mengubahnya">
           <Icon name={a.locked ? "lock" : "unlock"} />{a.locked ? "Terkunci" : "Kunci"}</button>
@@ -100,6 +130,8 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
         ))}
         {def && Object.keys(a.params).length > 0 && <button className="link-btn" onClick={() => set({ params: {} })}>Kembalikan ke bawaan</button>}
       </div>
+
+      <QuickPlace a={a} def={def} />
 
       <div className="group">
         <span className="group__label">Posisi dan ukuran</span>
@@ -127,14 +159,9 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
 
       <div className="group">
         <span className="group__label">Gerakan</span>
-        <div className="grid2">
-          {(["in", "out"] as const).map((k) => (
-            <label key={k} className="field"><span>{k === "in" ? "Masuk" : "Keluar"}</span>
-              <select value={a.anim[k] ?? ""} onChange={(e) => set({ anim: { ...a.anim, [k]: e.target.value || null } })}>
-                <option value="">Tidak ada</option>{ANIM_PRESETS.map((p) => <option key={p} value={p}>{ANIM_LABEL[p]}</option>)}
-              </select></label>
-          ))}
-        </div>
+        {(["in", "out"] as const).map((k) => (
+          <EffectPicker key={k} label={k === "in" ? "Masuk" : "Keluar"} choices={ANIM_CHOICES[k]} value={a.anim[k] ?? ""} onPick={(v) => set({ anim: { ...a.anim, [k]: v || null } })} />
+        ))}
         <div className="row row--between">
           <span className="muted">{a.keyframes.length ? `${a.keyframes.length} titik gerak` : "Belum ada titik gerak"}</span>
           <button className="btn btn--sm-text" disabled={rel < 0 || rel >= a.duration} title="Atur posisi elemen, lalu simpan di sini. Di antara dua titik, elemen bergerak halus."
@@ -178,6 +205,53 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
   );
 }
 
+const SIZES: { label: string; scale: number }[] = [{ label: "Kecil", scale: 0.75 }, { label: "Sedang", scale: 1 }, { label: "Besar", scale: 1.3 }];
+
+/** Tata letak cepat: taruh elemen di atas/tengah/bawah area aman, jadikan B-roll (latar grid putih di belakangnya), dan pilih ukuran. */
+function QuickPlace({ a, def }: { a: AssetInstance; def: AssetDef | undefined }) {
+  const ed = useEd();
+  const seq = ed.project.sequence;
+  const boxH = typeof def?.layout.h === "number" ? def.layout.h : 400;
+  const set = (transform: Partial<AssetInstance["transform"]>) => ed.op({ type: "updateAsset", id: a.id, changes: { transform } } as Op);
+  const y = (w: Placement, scale = a.transform.scale) => placementY(w, boxH, scale, seq.height);
+  const at = (["atas", "tengah", "bawah"] as const).find((w) => Math.abs(a.transform.y - y(w)) < 4 && Math.abs(a.transform.x - seq.width / 2) < 4);
+  const latarDef = BUILTIN_ASSETS.find((d) => d.id === "cz.latar")!;
+  const behind = ed.project.assets.some((x) => x.defId === "cz.latar" && x.start <= a.start && x.start + x.duration >= a.start + a.duration);
+  const boxW = typeof def?.layout.w === "number" ? def.layout.w : 900;
+  const full = fullScale(boxW, boxH, seq);
+  const isFull = Math.abs(a.transform.scale - full) < 0.01 && Math.abs(a.transform.y - seq.height / 2) < 4;
+  // latar disisipkan di bawah elemen: elemen dipasang ulang sesudah latar (urutan aset = urutan lapisan)
+  const withBackdrop = (label: string, gaya: string, scale: number) => {
+    const bg = instantiate(latarDef, {}, { start: a.start, fps: seq.fps, seq }, { duration: a.duration, params: { gaya } });
+    ed.op({ type: "batch", label, ops: [
+      { type: "removeAssets", ids: [a.id] },
+      { type: "addAssets", assets: [...(behind ? [] : [bg]), { ...withoutId(a), transform: { ...a.transform, x: seq.width / 2, y: seq.height / 2, scale } }] },
+    ] } as Op);
+  };
+  const broll = () => withBackdrop("Jadikan B-roll", "grid-putih", a.transform.scale);
+  const fullscreen = () => withBackdrop("Jadikan layar penuh", "biru", full);
+  if (a.defId === "cz.latar") return null;
+  return (
+    <div className="group">
+      <span className="group__label">Penempatan</span>
+      <div className="seg">
+        {(["atas", "tengah", "bawah"] as const).map((w) => (
+          <button key={w} className={"seg__btn" + (at === w ? " is-on" : "")} disabled={a.locked} onClick={() => set({ x: seq.width / 2, y: y(w) })}>{w[0].toUpperCase() + w.slice(1)}</button>
+        ))}
+        <button className={"seg__btn" + (behind && !isFull ? " is-on" : "")} disabled={a.locked || behind} onClick={broll} title="Taruh di tengah dengan latar putih bergrid di belakangnya">B-roll</button>
+        <button className={"seg__btn" + (isFull ? " is-on" : "")} disabled={a.locked || isFull} onClick={fullscreen} title="Besarkan sampai memenuhi layar, dengan latar biru di belakangnya (latar bisa diganti di elemen Latar layar penuh)">Layar penuh</button>
+      </div>
+      <span className="group__label">Ukuran</span>
+      <div className="seg">
+        {SIZES.map((z) => (
+          <button key={z.label} className={"seg__btn" + (Math.abs(a.transform.scale - z.scale) < 0.01 ? " is-on" : "")} disabled={a.locked}
+            onClick={() => set({ scale: z.scale, ...(at ? { y: y(at, z.scale) } : {}) })}>{z.label}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AnchorButton({ a }: { a: AssetInstance }) {
   const ed = useEd();
   const p = ed.project;
@@ -207,6 +281,7 @@ export function CaptionInspector({ c }: { c: Caption }) {
   return (
     <>
       <h2 id="insp-h" className="panel__title">Subtitle</h2>
+      <BehindHead start={c.start} end={c.end} on={(c.style as Record<string, unknown>).behindHead === true} onChange={(v) => setStyle("behindHead", v || undefined)} />
       <div className="word-chips" role="group" aria-label="Kata di blok ini">
         {c.words.map((x, i) => (
           <button key={i} className={"chipword" + (i === wi ? " is-on" : "") + (x.style !== "normal" ? ` chipword--${x.style}` : "")} onClick={() => setWi(i === wi ? null : i)}>{x.text}</button>
@@ -245,18 +320,11 @@ export function CaptionInspector({ c }: { c: Caption }) {
           <Field label="Jarak baris" type="number" step={0.05} value={st.lineHeight ?? 1.15} onCommit={(v) => setStyle("lineHeight", num(v, 1.15))} />
         </div>
         <label className="check"><input type="checkbox" checked={!!st.uppercase} onChange={(e) => setStyle("uppercase", e.target.checked)} /><span>Kapital semua</span></label>
-        <label className="field field--inline"><span>Kata yang diucapkan</span>
-          <select value={st.activeEffect ?? "warna"} onChange={(e) => setStyle("activeEffect", e.target.value)}>
-            <option value="warna">Berwarna</option><option value="skala">Membesar</option><option value="latar">Diberi latar</option><option value="tidak">Tidak ditandai</option>
-          </select></label>
-        <div className="grid2">
-          {(["in", "out"] as const).map((k) => (
-            <label key={k} className="field"><span>{k === "in" ? "Masuk" : "Keluar"}</span>
-              <select value={st[k] ?? (k === "in" ? "blurRise" : "")} onChange={(e) => setStyle(k, e.target.value || undefined)}>
-                <option value="">Tidak ada</option>{ANIM_PRESETS.map((p) => <option key={p} value={p}>{ANIM_LABEL[p]}</option>)}
-              </select></label>
-          ))}
-        </div>
+        <EffectPicker label="Gaya subtitle" choices={LAYOUT_CHOICES} value={st.layout ?? "kata"} onPick={(v) => setStyle("layout", v === "kata" ? undefined : v)} />
+        <EffectPicker label="Aksen kata kunci" choices={ACCENT_CHOICES} value={st.keyAccent ?? ""} onPick={(v) => setStyle("keyAccent", v || undefined)} />
+        <EffectPicker label="Sorotan kata yang diucapkan" choices={HIGHLIGHT_CHOICES} value={st.activeEffect === "latar" ? "pil" : st.activeEffect ?? "pil"} onPick={(v) => setStyle("activeEffect", v === "pil" ? undefined : v)} />
+        <EffectPicker label="Masuk (per kata)" choices={CAPTION_IN_CHOICES} value={st.in ?? "springRise"} onPick={(v) => setStyle("in", v === "springRise" ? undefined : v)} />
+        <EffectPicker label="Keluar" choices={ANIM_CHOICES.out} value={st.out ?? ""} onPick={(v) => setStyle("out", v || undefined)} />
       </div>
 
       <div className="actions">

@@ -396,8 +396,10 @@ Satu file `project.cz.json` memuat seluruh keadaan proyek. Media, proxy, dan has
 | `<proyek>\proxy\`, `<proyek>\cache\` | Proxy 720p, thumbnail, waveform, frame cache |
 | `<proyek>\render\` | Hasil render |
 | `<proyek>\.cz\` | Riwayat undo, autosave tiap 30 dtk, cadangan harian, sesi Claude, log, gambar catatan |
-| `%USERPROFILE%\.cz-studio\skills\<id>\v<n>\` | Salinan skill, `template.json`, `assets\*.json`, thumbnail aset |
-| `%USERPROFILE%\.cz-studio\` | `settings.json`, model transkrip, daftar proyek terakhir, `cz-mcp.json` |
+| `%USERPROFILE%\Videos\CZ Studio\Skills\<id>\v<n>\` | Salinan skill, `cz-template.json`, `cz-assets\*.json`, `cz-component.js` |
+| `%USERPROFILE%\Videos\CZ Studio\Aset\` | SFX dan font bawaan CZ |
+| `%USERPROFILE%\Videos\CZ Studio\Proyek\<judul>\` | Folder proyek baru (bawaan) |
+| `%USERPROFILE%\.cz-studio\` | `settings.json`, ffmpeg, whisper dan model transkrip, daftar proyek terakhir, `cz-mcp.json` |
 
 ### Skema `project.cz.json` (ringkas)
 

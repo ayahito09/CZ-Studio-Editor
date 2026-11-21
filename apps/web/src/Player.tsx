@@ -5,6 +5,7 @@ import { mediaUrl } from "./api.ts";
 import { useEd } from "./ed.ts";
 import { Icon } from "./icons.tsx";
 import { Overlay } from "./Overlay.tsx";
+import { SkillOverlay } from "./SkillOverlay.tsx";
 import { timecode, useStore } from "./store.ts";
 
 const PROXY_READY = new Set(["thumbnail", "waveform", "siap"]);
@@ -22,8 +23,8 @@ export function PreviewPlayer() {
   // Pratinjau memakai proxy 720p; render (F8) memakai file asli lewat komposisi yang sama.
   const readyKey = project.media.filter((m) => PROXY_READY.has(s.jobs[m.id]?.stage)).map((m) => m.id).join(",");
   const src = useMemo(() => Object.fromEntries(readyKey.split(",").filter(Boolean).map((id) => [id, mediaUrl(id, "proxy")])), [readyKey]);
-  const lib = useMemo(() => (ed.lib ? { template: ed.lib.template, assets: ed.lib.assets, base: ed.lib.base } : null), [ed.lib]);
-  const inputProps = useMemo(() => ({ project, src, lib, output: { width, height } }), [project, src, lib, width, height]);
+  const lib = useMemo(() => (ed.lib ? { template: ed.lib.template, assets: ed.lib.assets, base: ed.lib.base, component: ed.lib.component, media: ed.lib.media } : null), [ed.lib]);
+  const inputProps = useMemo(() => ({ project, src, lib, output: { width, height }, subjects: ed.subjects }), [project, src, lib, width, height, ed.subjects]);
 
   useEffect(() => {
     const p = ed.player.current;
@@ -61,6 +62,7 @@ export function PreviewPlayer() {
   return (
     <section className="player" aria-label="Pratinjau">
       <div className="player__stage">
+        <span className="player__spec mono" aria-hidden="true">{width}×{height} · {fps} fps</span>
         <div className="player__frame" ref={frameRef} style={{ "--w": width, "--h": height } as CSSProperties}>
           <Player
             ref={ed.player}
@@ -81,6 +83,7 @@ export function PreviewPlayer() {
           {vertical && safe && <div className="player__safe" style={safeBox} aria-hidden="true" />}
           {project.clips.length === 0 && <p className="player__empty">Seret video ke sini untuk mulai</p>}
           {(ed.mode === "edit" || ed.mode === "plan") && <Overlay frameRef={frameRef} />}
+          {(ed.mode === "edit" || ed.mode === "plan") && ed.lib?.component && <SkillOverlay frameRef={frameRef} />}
           {ed.preview && ed.mode === "media" && <span className="player__badge">Pratinjau dengan potongan</span>}
         </div>
       </div>

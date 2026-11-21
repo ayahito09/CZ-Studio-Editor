@@ -6,7 +6,7 @@ import { basename, extname, isAbsolute, join } from "node:path";
 import { PEAKS_PER_SEC, thumbPlan, type Media } from "@cz/core";
 import { toolBin } from "./config.ts";
 
-export const VIDEO_EXT = new Set([".mp4", ".mov", ".mkv", ".webm", ".m4v"]);
+export const VIDEO_EXT = new Set([".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv", ".flv", ".3gp"]);
 const exists = (p: string) => access(p).then(() => true, () => false);
 
 export const mediaFile = (folder: string, m: Media) => (isAbsolute(m.path) ? m.path : join(folder, m.path));
@@ -93,6 +93,32 @@ export async function probe(file: string) {
   if (rot === 90) [width, height] = [height, width];
   const fps = rate(v.avg_frame_rate) || rate(v.r_frame_rate) || 30;
   return { duration, width, height, fps: Math.round(fps * 1000) / 1000, hasAudio: streams.some((s) => s.codec_type === "audio") };
+}
+
+/**
+ * File yang dibaca render: H.264 dengan frame rate tetap, resolusi asli. Remotion gagal ("No frame found at position")
+ * pada HEVC / frame rate variabel seperti MOV iPhone. File asli tidak diubah; hasilnya di-cache di folder proxy.
+ */
+export async function renderSource(folder: string, m: Media, onProgress?: (frac: number) => void): Promise<string> {
+  const src = mediaFile(folder, m);
+  const codec = (await run("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", src])).trim();
+  if (codec === "h264" && extname(src).toLowerCase() === ".mp4") return src;
+  const out = join(folder, "proxy", `${m.id}.render.mp4`);
+  if (await exists(out)) return out;
+  await mkdir(join(folder, "proxy"), { recursive: true });
+  const tmp = out + ".tmp.mp4";
+  await run("ffmpeg", [
+    "-y", "-v", "error", "-nostdin", "-i", src, "-progress", "pipe:1", "-nostats",
+    "-r", String(Math.round(m.fps) || 30), "-fps_mode", "cfr",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
+    ...(m.hasAudio ? ["-c:a", "aac", "-b:a", "256k"] : ["-an"]),
+    "-movflags", "+faststart", tmp,
+  ], (chunk) => {
+    const us = /out_time_us=(\d+)/.exec(chunk.toString());
+    if (us) onProgress?.(Math.min(1, Number(us[1]) / 1e6 / m.duration));
+  }).catch(async (e) => { await rm(tmp, { force: true }); throw e; });
+  await rename(tmp, out);
+  return out;
 }
 
 export type Stage = "menunggu" | "proxy" | "thumbnail" | "waveform" | "siap" | "gagal";
@@ -188,7 +214,7 @@ export class MediaJobs {
 /** Menulis stream upload ke folder media dengan nama unik. */
 export async function saveUpload(folder: string, name: string, body: NodeJS.ReadableStream): Promise<string> {
   const ext = extname(name).toLowerCase();
-  if (!VIDEO_EXT.has(ext)) throw new Error(`Format ${ext || "tanpa ekstensi"} tidak didukung (MP4, MOV, MKV, WebM)`);
+  if (!VIDEO_EXT.has(ext)) throw new Error(`Format ${ext || "tanpa ekstensi"} tidak didukung (MP4, MOV, MKV, WebM, AVI, MTS, MPG, WMV, FLV, 3GP)`);
   await mkdir(join(folder, "media"), { recursive: true });
   let rel = join("media", safeName(name));
   for (let i = 2; await exists(join(folder, rel)); i++) rel = join("media", `${basename(safeName(name), ext)} (${i})${ext}`);

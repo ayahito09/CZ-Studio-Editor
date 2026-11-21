@@ -5,8 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyOp, type Project } from "@cz/core";
 import { config } from "./config.ts";
-import { mediaFile, run, safeName } from "./media.ts";
-import type { Library } from "./skills.ts";
+import { mediaFile, renderSource, run, safeName } from "./media.ts";
+import { subjectFile } from "./faces.ts";
+import { compositionLib, type Library } from "./skills.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -16,10 +17,14 @@ export interface RenderSettings {
   codec: "h264" | "h265" | "prores";
   crf: number;
   normalize: boolean;
+  /** Sampel motion blur shutter per frame bergerak (0 = mati). Bawaan MOTION_BLUR. */
+  motionBlur?: number;
   range: "all" | "inout" | "scene";
   inFrame?: number; outFrame?: number; sceneId?: string;
   outDir?: string;
 }
+/** Motion blur wajib di render final: 5 sampel shutter 180° hanya di frame yang bergerak. */
+export const MOTION_BLUR = 5;
 export type RenderState = "antre" | "menyiapkan" | "render" | "audio" | "selesai" | "gagal" | "batal";
 export interface RenderJob {
   id: string; folder: string; title: string; settings: RenderSettings;
@@ -45,12 +50,13 @@ export const renderFiles = new Set<string>();
 export const fileUrl = (path: string) => { renderFiles.add(path); return `${base()}/api/file?t=${config.token}&f=${encodeURIComponent(path)}`; };
 
 /** Props komposisi untuk render: file asli (atau proxy untuk frame cepat) lewat server lokal ini. */
-export function renderProps(folder: string, project: Project, lib: Library | null, useProxy: boolean, out?: { width: number; height: number }) {
-  const src = Object.fromEntries(project.media.map((m) => [m.id, fileUrl(useProxy ? join(folder, m.proxy) : mediaFile(folder, m))]));
+export async function renderProps(folder: string, project: Project, lib: Library | null, useProxy: boolean, out?: { width: number; height: number }, files?: Record<string, string>) {
+  const src = Object.fromEntries(project.media.map((m) => [m.id, fileUrl(useProxy ? join(folder, m.proxy) : files?.[m.id] ?? mediaFile(folder, m))]));
   return {
     project, src,
-    lib: lib ? { template: lib.template, assets: lib.assets, base: `${base()}/api/skills/${lib.id}/${lib.version}/file/` } : null,
+    lib: lib ? await compositionLib(lib, `${base()}/api/skills/${lib.id}/${lib.version}/file/`, folder, project.media.map((m) => m.id), (_id, p) => fileUrl(p)) : null,
     output: out ?? { width: project.sequence.width, height: project.sequence.height },
+    subjects: Object.fromEntries(project.media.filter((m) => existsSync(subjectFile(folder, m.id))).map((m) => [m.id, fileUrl(subjectFile(folder, m.id))])),
   };
 }
 
@@ -69,11 +75,21 @@ async function prepare(onNote: (s: string) => void) {
 /** Frame komposit untuk diperiksa Claude (cz_get_frame); memakai proxy supaya cepat. */
 export async function stillFrame(folder: string, project: Project, lib: Library | null, frame: number, outFile: string, scale = 0.5) {
   const { r, url } = await prepare(() => {});
-  const inputProps = renderProps(folder, project, lib, true);
+  const inputProps = await renderProps(folder, project, lib, true);
   const composition = await r.selectComposition({ serveUrl: url, id: "cz", inputProps });
   await mkdir(dirname(outFile), { recursive: true });
   await r.renderStill({ serveUrl: url, composition, inputProps, frame: Math.max(0, Math.min(composition.durationInFrames - 1, frame)), output: outFile, imageFormat: "jpeg", jpegQuality: 80, scale });
   return outFile;
+}
+
+/** Pesan gagal yang bisa ditindaklanjuti: penyebab umum diterjemahkan, sisanya 3 baris pertama pesan aslinya. */
+export function friendlyError(e: Error): string {
+  const m = e?.message ?? String(e);
+  if (/ENOSPC|no space left/i.test(m)) return "Ruang disk penuh. Kosongkan ruang lalu coba lagi.";
+  if (/EACCES|EPERM|EBUSY|permission denied/i.test(m)) return "Tidak bisa menulis ke folder tujuan. Pilih folder lain atau tutup file yang sedang dibuka.";
+  if (/ffmpeg/i.test(m) && /not found|ENOENT/i.test(m)) return "ffmpeg tidak ditemukan. Jalankan cz install lalu coba lagi.";
+  if (/ensureBrowser|chrome-headless|download/i.test(m) && /fail|ENOTFOUND|ECONN/i.test(m)) return "Alat ekspor gagal diunduh. Periksa koneksi internet lalu coba lagi.";
+  return m.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 3).join(" · ").slice(0, 400);
 }
 
 /** Antrean render global: satu render berjalan pada satu waktu, memakai snapshot proyek saat tombol ditekan. */
@@ -117,7 +133,7 @@ export class RenderQueue {
     if (!job) return;
     this.running = true;
     try { await this.render(job); }
-    catch (e) { if (job.state !== "batal") { job.state = "gagal"; job.error = (e as Error).message.split("\n")[0]; } }
+    catch (e) { if (job.state !== "batal") { job.state = "gagal"; job.error = friendlyError(e as Error); } }
     finally {
       job.endedAt = Date.now();
       this.snapshots.delete(job.id);
@@ -148,7 +164,13 @@ export class RenderQueue {
 
     const { r, url } = await prepare((n) => { job.note = n; });
     if ((job.state as RenderState) === "batal") return;
-    const inputProps = renderProps(job.folder, project, snap.lib, false, { width: s.width, height: s.height });
+    const files: Record<string, string> = {};
+    for (const m of project.media.filter((x) => project.clips.some((c) => c.mediaId === x.id))) {
+      job.note = `Menyiapkan ${m.name} untuk ekspor (sekali saja per video)`;
+      files[m.id] = await renderSource(job.folder, m, (f) => { job.note = `Menyiapkan ${m.name} untuk ekspor · ${Math.round(f * 100)}%`; });
+      if ((job.state as RenderState) === "batal") return;
+    }
+    const inputProps = { ...(await renderProps(job.folder, project, snap.lib, false, { width: s.width, height: s.height }, files)), motionBlur: s.motionBlur ?? MOTION_BLUR };
     const composition = await r.selectComposition({ serveUrl: url, id: "cz", inputProps });
     const ext = s.codec === "prores" ? "mov" : "mp4";
     const dir = s.outDir ?? join(job.folder, "render");

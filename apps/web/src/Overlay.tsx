@@ -118,7 +118,7 @@ export function Overlay({ frameRef }: { frameRef: React.RefObject<HTMLDivElement
     } else {
       const a = p.assets.find((x) => x.id === b.id)!;
       if (a.locked) return;
-      const def = a.defId ? ed.lib?.assets.find((x) => x.id === a.defId) : undefined;
+      const def = a.defId ? ed.assetDefs.find((x) => x.id === a.defId) : undefined;
       const key = def ? Object.entries(def.params).find(([, pd]) => pd.type === "text")?.[0] : "text";
       if (!key) return;
       const val = a.params[key] ?? def?.params[key]?.default ?? "";

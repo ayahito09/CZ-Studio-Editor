@@ -1,20 +1,27 @@
 // `cz mcp`: server MCP stdio yang dijalankan Claude Code. Ia tidak menyentuh proyek sendiri;
 // setiap alat diteruskan ke server CZ lokal (/api/mcp/*), yang memvalidasi dan mencatatnya di riwayat sebagai "claude".
+import { request } from "node:http";
 import { createInterface } from "node:readline";
 
 export async function runMcp(port: number) {
   const token = process.env.CZ_TOKEN ?? "";
   const base = `http://127.0.0.1:${port}/api/mcp`;
-  const call = async (path: string, body?: unknown) => {
-    const res = await fetch(base + path, {
-      method: body === undefined ? "GET" : "POST",
-      headers: { "content-type": "application/json", "x-cz-token": token },
-      body: body === undefined ? undefined : JSON.stringify(body),
+  // node:http tanpa batas waktu: fetch memutus setelah 5 menit, padahal skrip skill (cz_run_skill_script) bisa lebih lama.
+  const call = (path: string, body?: unknown) => new Promise<unknown>((resolve, reject) => {
+    const req = request(base + path, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", "x-cz-token": token } }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => (text += d));
+      res.on("end", () => {
+        let data: unknown = {};
+        try { data = JSON.parse(text); } catch { /* bukan JSON */ }
+        if ((res.statusCode ?? 500) >= 400) reject(new Error((data as { error?: string }).error ?? `server CZ membalas ${res.statusCode}`));
+        else resolve(data);
+      });
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? `server CZ membalas ${res.status}`);
-    return data;
-  };
+    req.on("error", reject);
+    req.end(body === undefined ? undefined : JSON.stringify(body));
+  });
   const send = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + "\n");
 
   const rl = createInterface({ input: process.stdin });

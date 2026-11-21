@@ -1,19 +1,36 @@
-import type { AssetDef, Op, Project, Template } from "@cz/core";
+import type { AssetDef, Op, Project, SkillControlGroup, Template } from "@cz/core";
 
 export type Stage = "menunggu" | "proxy" | "thumbnail" | "waveform" | "siap" | "gagal";
 export interface JobStatus { stage: Stage; progress: number; error?: string }
 export interface TxStatus { stage: "menunggu" | "transkrip" | "siap" | "gagal"; progress: number; error?: string }
 export interface LogEntry { at: number; kind: "user" | "text" | "tool" | "result" | "error" | "frame" | "info"; text: string }
 export interface ClaudeTask { id: string; label: string; state: "antre" | "berjalan" | "selesai" | "gagal" | "dihentikan"; log: LogEntry[]; startedAt?: number; endedAt?: number; costUsd?: number }
-export interface ClaudeStatus { state: "terhubung" | "belum-login" | "tidak-terpasang" | "memeriksa"; version?: string; detail?: string; checkedAt: number }
+export interface ClaudeStatus { state: "terhubung" | "belum-login" | "tidak-terpasang" | "memeriksa"; email?: string; plan?: string; version?: string; detail?: string; checkedAt: number }
 export interface Pending { id: string; label: string; at: number }
 export interface RenderJob {
   id: string; folder: string; title: string; state: "antre" | "menyiapkan" | "render" | "audio" | "selesai" | "gagal" | "batal";
   progress: number; frames: number; eta: number | null; output?: string; error?: string; note?: string;
-  settings: { width: number; height: number; fps: number; codec: string; range: string; sceneId?: string };
+  settings: { width: number; height: number; fps: number; codec: string; range: string; sceneId?: string } & Record<string, unknown>;
+  startedAt?: number; endedAt?: number;
 }
 export interface SetupStep { id: string; label: string; state: "menunggu" | "memeriksa" | "mengunduh" | "siap" | "gagal"; progress: number; note?: string }
-export interface Settings { reviewClaude: boolean; txLang: string; claudeModel: string }
+export interface Settings { reviewClaude: boolean; txLang: string; claudeModel: string; claudeEffort: string }
+/** Pilihan model Claude (sama dengan CLAUDE_MODELS di server). "" = bawaan Claude Code. */
+export const CLAUDE_MODELS = [
+  { id: "", name: "Bawaan", hint: "ikut Claude Code" },
+  { id: "opus", name: "Opus", hint: "paling cerdas" },
+  { id: "sonnet", name: "Sonnet", hint: "seimbang" },
+  { id: "haiku", name: "Haiku", hint: "tercepat" },
+];
+/** Tingkat effort (sama dengan CLAUDE_EFFORTS di server): makin tinggi makin teliti, makin banyak kuota. */
+export const CLAUDE_EFFORTS = [
+  { id: "", name: "Bawaan", hint: "ikut Claude Code" },
+  { id: "low", name: "Rendah", hint: "cepat, hemat kuota" },
+  { id: "medium", name: "Sedang", hint: "seimbang" },
+  { id: "high", name: "Tinggi", hint: "teliti" },
+  { id: "xhigh", name: "Sangat tinggi", hint: "sangat teliti" },
+  { id: "max", name: "Maksimal", hint: "paling dalam, boros kuota" },
+];
 
 export interface SessionState {
   folder: string;
@@ -27,9 +44,17 @@ export interface SessionState {
   claude: { sessionId: string | null; tasks: ClaudeTask[] };
   pending: Pending[];
   busy: boolean;
-  auto: { steps: AutoStep[]; running: boolean } | null;
+  auto: { steps: AutoStep[]; running: boolean; startedAt: number } | null;
+  claudeFocus: ClaudeFocus | null;
+  claudeNote: { text: string; progress?: number; at: number } | null;
 }
-export interface AutoStep { id: string; label: string; state: "menunggu" | "berjalan" | "selesai" | "dilewati" | "gagal"; note?: string }
+export interface AutoStep { id: string; label: string; state: "menunggu" | "berjalan" | "selesai" | "dilewati" | "gagal"; note?: string; progress?: number; startedAt?: number; endedAt?: number }
+export interface ClaudeFocus { frame: number; end: number; label: string; ids: string[]; at: number }
+
+/** Kemajuan satu media 0..1 lintas tahap (sama dengan server). */
+export const jobFraction = (j: JobStatus | undefined) =>
+  !j ? 0 : j.stage === "siap" || j.stage === "gagal" ? 1 : j.stage === "proxy" ? j.progress * 0.8
+    : j.stage === "thumbnail" ? 0.8 + j.progress * 0.05 : j.stage === "waveform" ? 0.85 + j.progress * 0.15 : 0;
 export interface Recent {
   i: number; folder: string; name: string; exists: boolean; title: string; durationSec: number; updatedAt: number; videos: number;
   poster: { width: number; height: number; duration: number } | null; preview: boolean;
@@ -41,7 +66,13 @@ export interface State {
 }
 
 export interface SkillMeta { id: string; name: string; description: string; source: string; versions: number[]; addedAt: number; generated: Record<number, boolean> }
-export interface Library { id: string; version: number; name: string; template: Template | null; assets: AssetDef[]; warnings: string[]; base: string }
+export interface Library {
+  id: string; version: number; name: string; template: Template | null; assets: AssetDef[]; warnings: string[]; base: string;
+  component: { url: string; publicBase: string; sfxLib: Record<string, string[]> | null } | null;
+  media: Record<string, { faces?: unknown[]; subject?: string }>;
+  styleOptions: { label: string; ids: string[] }[];
+  controls: SkillControlGroup[];
+}
 export interface Inventory { refs: string[]; fonts: string[]; sfx: string[]; images: string[]; presets: string[]; scripts: string[]; other: string[] }
 
 async function json<T>(res: Response): Promise<T> {
@@ -62,6 +93,9 @@ export const api = {
   open: (folder: string) => post("open", { folder }),
   create: (title: string, folder?: string, skill?: { id: string; version: number }) => post("new", { title, folder, skill }),
   autoStart: () => post("auto/start"),
+  autoCamera: (ids?: string[]) => post("scenes/auto-camera", { ids }),
+  subjects: () => get<{ subjects: Record<string, string>; busy: string[] }>("subjects"),
+  makeSubject: (mediaId: string) => postAny<{ ok: boolean }>(`media/${mediaId}/subject/make`, {}),
   forget: (folder: string) => post("recent/forget", { folder }),
   close: () => post("close"),
   op: (op: Op) => post("op", { op }),
@@ -72,6 +106,8 @@ export const api = {
   settings: (s: Partial<Settings>) => post("settings", s),
   history: () => get<{ done: { label: string; source: string; at: number }[]; undone: number }>("history"),
   // F3
+  updateCheck: () => get<{ current: string; latest: string | null; available: boolean }>("update"),
+  updateInstall: () => postAny<{ ok: boolean; detail: string }>("update/install"),
   engine: () => get<{ ready: boolean; bin: string | null; model: string | null }>("engine"),
   transcribe: (mediaId?: string, lang?: string) => post("transcribe", { mediaId, lang }),
   detectCuts: (o: { minGap: number; padding: number; thresholdDb: number | null }) => postAny<State & { detect: { threshold: number | null; count: number } }>("cuts/detect", o),
@@ -79,7 +115,8 @@ export const api = {
   // F4
   claudeStatus: (force: boolean) => get<ClaudeStatus>("claude/status" + (force ? "?force=1" : "")),
   claudeLogin: () => postAny<{ ok: boolean }>("claude/login"),
-  claudeRun: (action: string, text = "") => post("claude/run", { action, text }),
+  claudeLogout: (relogin: boolean) => postAny<{ ok: boolean }>("claude/logout", { relogin }),
+  claudeRun: (action: string, text = "", source?: string) => post("claude/run", { action, text, source }),
   claudeEstimate: (action: string) => get<{ text: string }>("claude/estimate?action=" + action),
   claudeStop: (id?: string) => post("claude/stop", { id }),
   claudeNewSession: () => post("claude/new-session"),

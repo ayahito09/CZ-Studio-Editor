@@ -1,6 +1,7 @@
 import { createContext, useContext, type RefObject } from "react";
 import type { PlayerRef } from "@remotion/player";
-import type { NewClip, Op, Project } from "@cz/core";
+import type { AssetDef, NewClip, Op, Project } from "@cz/core";
+import type { Registry } from "@cz/composition";
 import type { Library, SessionState, State } from "./api.ts";
 import type { Store } from "./store.ts";
 
@@ -35,6 +36,12 @@ export interface Ed {
   setMode: (m: Mode) => void;
   lib: Library | null;
   reloadLib: () => void;
+  /** Video subjek ber-alpha per media (mesin matte CZ) dan daftar media yang sedang dibuatkan. */
+  subjects: Record<string, string>; reloadSubjects: () => void;
+  /** Semua aset yang bisa dipasang: bawaan CZ (kode), komposisi "Aset…" skill (kode), lalu aset lama skill. */
+  assetDefs: AssetDef[];
+  /** Komposisi skill yang sudah dimuat (untuk thumbnail aset skill). */
+  skillReg: Registry | null;
   /** Pratinjau sementara di Player (mis. Putar dengan potongan); null = proyek sebenarnya. */
   preview: Project | null;
   setPreview: (p: Project | null) => void;

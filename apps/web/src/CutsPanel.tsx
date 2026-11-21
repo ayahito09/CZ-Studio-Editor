@@ -4,17 +4,16 @@ import { api } from "./api.ts";
 import { useClaudeAction } from "./ClaudePanel.tsx";
 import { useEd } from "./ed.ts";
 import { Icon } from "./icons.tsx";
+import { Progress } from "./Progress.tsx";
+import { Section } from "./Section.tsx";
 import { timecode } from "./store.ts";
 
 export function CutsPanel() {
-  const [tab, setTab] = useState<"jeda" | "teks">("jeda");
+  // Satu panel "Rapikan": potong jeda lalu transkrip, ditumpuk sebagai bagian yang bisa dilipat.
   return (
-    <aside className="panel inspector" aria-label="Potong jeda dan transkrip">
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={tab === "jeda"} className={"tabs__btn" + (tab === "jeda" ? " is-on" : "")} onClick={() => setTab("jeda")}>Potong jeda</button>
-        <button role="tab" aria-selected={tab === "teks"} className={"tabs__btn" + (tab === "teks" ? " is-on" : "")} onClick={() => setTab("teks")}>Transkrip</button>
-      </div>
-      {tab === "jeda" ? <Silence /> : <Transcript />}
+    <aside className="panel inspector" aria-label="Rapikan: potong jeda dan transkrip">
+      <Section title="Potong jeda"><Silence /></Section>
+      <Section title="Transkrip"><Transcript /></Section>
     </aside>
   );
 }
@@ -175,8 +174,8 @@ function Transcript() {
       </div>
       {txs.filter(([, t]) => t.stage !== "siap").map(([id, t]) => (
         <div key={id} className="media-item__job">
-          <span>{p.media.find((m) => m.id === id)?.name}: {t.stage === "gagal" ? t.error : t.stage === "menunggu" ? "menunggu" : "sedang ditulis"}</span>
-          {t.stage !== "gagal" && <div className="bar"><div className="bar__fill" style={{ width: `${Math.round(t.progress * 100)}%` }} /></div>}
+          {t.stage === "gagal" ? <span>{p.media.find((m) => m.id === id)?.name}: {t.error}</span>
+            : <Progress key={t.stage} size="sm" value={t.stage === "menunggu" ? null : t.progress} label={`${p.media.find((m) => m.id === id)?.name}: ${t.stage === "menunggu" ? "menunggu giliran" : "menulis transkrip"}`} />}
         </div>
       ))}
 

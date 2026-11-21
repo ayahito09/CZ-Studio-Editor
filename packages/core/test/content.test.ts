@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildCaptions, checkCuts, createProject, detectSilences, expandPreset, History, suggestFillers, validateAssetDef, validateTemplate,
+  BUILTIN_ASSETS, buildCaptions, checkCuts, createProject, detectSilences, expandPreset, History, instantiate, missingAssets, SKILL_ASSET, skillAssetDef,
+  assetBox, cameraFromContent, controlValues, controlVisible, faceToSeq, fullScale, nextCustom, normalizeControls, keyWordIndex, placementIssues, placementY, skillSegments, suggestFillers, validateAssetDef, validateTemplate,
   type AssetDef, type Media, type Template,
 } from "../src/index.ts";
 
@@ -153,6 +154,17 @@ test("validasi definisi aset dan template", () => {
   const t: Template = { id: "clean-editing", name: "Clean", version: 1, tokens: { accent: "#143BFF" }, caption: {}, stylePresets: [] };
   assert.deepEqual(validateTemplate(t), []);
   assert.ok(validateTemplate({ ...t, sfx: { woosh: "../../etc" } }).length);
+  assert.deepEqual(validateTemplate({ ...t, catalog: [{ id: "ce.kartu", name: "Kartu", source: "SKILL.md#kartu" }] }), []);
+  assert.ok(validateTemplate({ ...t, catalog: [{ id: "../x", name: "X" }] }).length);
+});
+
+test("katalog: aset yang disebut skill tetapi belum dibuat", () => {
+  const t: Template = {
+    id: "ce", name: "CE", version: 1, tokens: {}, caption: {}, stylePresets: [],
+    catalog: [{ id: "ce.kartu", name: "Kartu", source: "SKILL.md#kartu" }, { id: "ce.badge", name: "Badge", source: "refs/badge.md" }],
+  };
+  assert.deepEqual(missingAssets(t, ["ce.kartu"]).map((c) => c.id), ["ce.badge"]);
+  assert.deepEqual(missingAssets({ ...t, catalog: undefined }, []), []);
 });
 
 test("preset gaya dijabarkan menjadi aset scene", () => {
@@ -174,4 +186,137 @@ test("setScenes mempertahankan id scene lama supaya aset tetap terikat", () => {
   ok(h, { type: "setScenes", scenes: [{ ...a, end: 30 }, { title: "A2", start: 30, end: 60 }, b] });
   assert.deepEqual(h.project.scenes.map((s) => s.id), ["s1", "s3", "s2"]);
   assert.equal(h.project.assets[0].sceneId, "s2");
+});
+
+test("scene skill: divalidasi lalu dipecah per klip dengan kata relatif terhadap a", () => {
+  const h = withWords();
+  ok(h, { type: "addCuts", cuts: [{ kind: "jeda", mediaId: "m1", srcStart: 1.5, srcEnd: 2.5 }], apply: true });
+  const skill = { component: "CleanScene", props: { style: { caption: "cap-clean-kata" } } };
+  assert.ok(h.apply({ type: "setScenes", scenes: [{ title: "A", start: 0, end: 90, skill: { component: "../x", props: {} } }] }));
+  assert.ok(h.apply({ type: "setScenes", scenes: [{ title: "A", start: 0, end: 90, skill: { component: "CleanScene", props: [] } }] }));
+  ok(h, { type: "setScenes", scenes: [{ title: "A", start: 0, end: 90, skill }, { title: "B", start: 90, end: 200 }] });
+  const segs = skillSegments(h.project);
+  // Potongan 1.5-2.5 membelah footage: scene A = 0-1.5 dtk (45 frame) + 2.5-4.0 dtk (45 frame).
+  assert.deepEqual(segs.map((s) => [s.from, s.durationInFrames, s.a, s.b]), [[0, 45, 0, 1.5], [45, 45, 2.5, 4]]);
+  assert.deepEqual(segs[0].words, [{ w: "Satu", s: 0.5, e: 1 }]);
+  assert.deepEqual(segs[1].words.map((w) => [w.w, w.s]), [["dua", 0.5], ["tiga.", 1.1]]);
+  ok(h, { type: "updateScene", id: "s1", changes: { skill: null } });
+  assert.equal(skillSegments(h.project).length, 0);
+});
+
+test("aset kode: katalog bawaan sah, aset skill membaca isi dari defaultProps, instans dipasang lewat op", () => {
+  for (const d of BUILTIN_ASSETS) {
+    assert.deepEqual(validateAssetDef(d), [], d.id);
+    assert.equal(d.component, d.id);
+    assert.deepEqual(d.tree, []);
+  }
+  const sk = skillAssetDef("AsetKartuHarga", { judul: "Pro", harga: 99, poin: ["a", "b"], aksen: "#143BFF", tampil: true, data: { x: 1 } }, 90, 30, { width: 1080, height: 1920 });
+  assert.equal(sk.id, "skill:AsetKartuHarga");
+  assert.equal(sk.name, "Kartu Harga");
+  assert.deepEqual(Object.fromEntries(Object.entries(sk.params).map(([k, p]) => [k, p.type])), { judul: "text", harga: "number", poin: "list", aksen: "color", tampil: "bool" });
+  assert.equal(sk.duration, 3);
+  assert.ok(SKILL_ASSET.test("AsetChat") && !SKILL_ASSET.test("CleanScene"));
+  const h = withWords();
+  const chat = BUILTIN_ASSETS.find((d) => d.id === "cz.chat")!;
+  ok(h, { type: "addAssets", assets: [instantiate(chat, {}, { start: 0, fps: 30, seq: { width: 1080, height: 1920 } }, { params: { pesan: ["Saya: halo", "Claude: hai"] } })] });
+  assert.equal(h.project.assets[0].defId, "cz.chat");
+  assert.equal(h.project.assets[0].duration, 210);
+});
+
+test("mesin gerak: kamera aditif, transisi scene, dan easing keyframe divalidasi sebagai data", () => {
+  const h = withWords();
+  ok(h, { type: "setScenes", scenes: [{ title: "A", start: 0, end: 60 }, { title: "B", start: 60, end: 120 }] });
+  const camera = { moves: [{ at: 0, dur: 24, zoom: 1.15, ease: "move" }, { at: 16, dur: 20, x: 40, ease: "enter" }], shake: [{ at: 30, amp: 3 }] };
+  ok(h, { type: "updateScene", id: "s1", changes: { camera } });
+  ok(h, { type: "updateScene", id: "s2", changes: { transition: { kind: "whip", frames: 8 } } });
+  assert.deepEqual(h.project.scenes[0].camera, camera);
+  assert.deepEqual(h.project.scenes[1].transition, { kind: "whip", frames: 8 });
+  // kurva atau transisi yang tidak dikenal mesin ditolak
+  assert.ok(h.apply({ type: "updateScene", id: "s1", changes: { camera: { moves: [{ at: 0, dur: 10, ease: "bebas" }] } } }));
+  assert.ok(h.apply({ type: "updateScene", id: "s1", changes: { camera: { moves: [{ at: 0, dur: 0 }] } } }));
+  assert.ok(h.apply({ type: "updateScene", id: "s2", changes: { transition: { kind: "putar", frames: 8 } } }));
+  // proyek lama (from/to) tetap sah
+  ok(h, { type: "updateScene", id: "s1", changes: { camera: { from: 1, to: 1.06 } } });
+  ok(h, { type: "addAssets", assets: [{ trackId: "V3", defId: null, start: 0, duration: 30, keyframes: [{ frame: 0, opacity: 0 }, { frame: 10, opacity: 1, ease: "enterSnap" }] }] });
+  assert.ok(h.apply({ type: "updateAsset", id: h.project.assets[0].id, changes: { keyframes: [{ frame: 0, x: 1, ease: "zigzag" }] } }));
+});
+
+test("caption: kata kunci = kata pertama bergaya, selain itu kata terpanjang", () => {
+  const w = (text: string, style = "normal") => ({ text, style });
+  assert.equal(keyWordIndex([w("ini"), w("premium", "serif"), w("banget", "tebal")]), 1);
+  assert.equal(keyWordIndex([w("ini"), w("editan"), w("rapi!!")]), 1);
+  assert.equal(keyWordIndex([]), -1);
+});
+
+test("penempatan elemen: atas/bawah menempel di area aman, layar penuh tetap di tengah", () => {
+  assert.equal(placementY("atas", 200, 1, 1920), 320);
+  assert.equal(placementY("bawah", 200, 1, 1920), 1420);
+  assert.equal(placementY("tengah", 200, 1, 1920), 960);
+  assert.equal(placementY("atas", 1920, 1, 1920), 960);
+  assert.equal(placementY("bawah", 100, 2, 960), 660);
+});
+
+test("layar penuh: elemen dibesarkan sampai sisi terdekat area aman", () => {
+  assert.equal(fullScale(460, 200, { width: 1080, height: 1920 }), 2);
+  assert.equal(fullScale(900, 1300, { width: 1080, height: 1920 }), 1);
+  assert.equal(fullScale(100, 100, { width: 1080, height: 1920 }), 2.5);
+});
+
+test("penempatan: elemen yang menutupi wajah atau keluar area aman dilaporkan, layar penuh dibiarkan", () => {
+  const seq = { width: 1080, height: 1920 };
+  const face = faceToSeq({ x: 0.3, y: 0.3, w: 0.4, h: 0.25 }, { width: 1080, height: 1920 }, seq);
+  assert.deepEqual(face, { x0: 324, y0: 576, x1: 756, y1: 1056 });
+  const onFace = placementIssues(assetBox({ x: 540, y: 800, scale: 1 }, 800, 400), seq, face);
+  assert.ok(onFace.faceCover > 0.8 && onFace.issues.some((x) => x.includes("wajah")));
+  const below = placementIssues(assetBox({ x: 540, y: 1300, scale: 1 }, 800, 300), seq, face);
+  assert.deepEqual(below.issues, []);
+  const low = placementIssues(assetBox({ x: 540, y: 1500, scale: 1 }, 800, 300), seq, face);
+  assert.ok(low.issues[0].includes("bawah"));
+  assert.ok(placementIssues(assetBox({ x: 540, y: 960, scale: 1 }, 1080, 1920), seq, face).full);
+  // footage lanskap di sequence vertikal: dipotong kiri-kanan (cover)
+  const wide = faceToSeq({ x: 0.5, y: 0, w: 0.1, h: 0.1 }, { width: 1920, height: 1080 }, seq);
+  assert.deepEqual([wide.x0, wide.y0, Math.round(wide.x1), wide.y1], [540, 0, 881, 192]);
+});
+
+test("kontrol skill: normalisasi, nilai efektif, syarat, dan hanya selisih yang disimpan", () => {
+  const g = normalizeControls([
+    { group: "Kamera", controls: [
+      { key: "camera", label: "Kamera", type: "seg", options: [{ value: "statis" }, { value: "push", label: "Push" }], default: "statis" },
+      { key: "camAmt", label: "Kekuatan", type: "range", min: 2, max: 12, step: 1, unit: "%", default: 6, when: { key: "camera", not: ["statis"] } },
+      { key: "rusak", type: "seg", options: [{ value: "a" }] },
+      { key: "1salah", type: "switch" },
+    ] },
+    { group: "Kosong", controls: [] },
+  ]);
+  assert.equal(g.length, 1);
+  assert.deepEqual(g[0].controls.map((c) => c.key), ["camera", "camAmt"]);
+  let v = controlValues(g, null);
+  assert.deepEqual(v, { camera: "statis", camAmt: 6 });
+  assert.equal(controlVisible(g[0].controls[1], v), false);
+  v = controlValues(g, { camera: "push", camAmt: "bukan angka-sah?" });
+  assert.equal(controlVisible(g[0].controls[1], v), true);
+  assert.deepEqual(nextCustom(g, null, "camera", "push"), { camera: "push" });
+  assert.equal(nextCustom(g, { camera: "push" }, "camera", "statis"), null);
+  assert.deepEqual(normalizeControls("x"), []);
+});
+
+test("kamera: gerak punya masuk, tahan, keluar dan scene berakhir netral", () => {
+  const fps = 30;
+  const cam = cameraFromContent({ duration: 300, fps, words: [{ start: 40, end: 60, emphasis: false }, { start: 90, end: 110, emphasis: true }, { start: 200, end: 220, emphasis: true }], face: { x: 80, y: -40 } });
+  assert.equal(cam.moves!.length, 2);
+  for (const m of cam.moves!) { assert.ok(m.out && m.out > 0 && m.hold! > 0); assert.ok(m.at + m.dur + m.hold! + m.out <= 300 - 10); }
+  assert.ok(cam.moves![1].at >= cam.moves![0].at + cam.moves![0].dur + cam.moves![0].hold! + cam.moves![0].out!);
+  assert.ok(cam.moves![0].x! > 0 && cam.moves![0].y! < 0); // condong ke arah wajah
+  // tanpa kata penting: satu dorong; scene sangat pendek: tidak ada gerak
+  assert.equal(cameraFromContent({ duration: 240, fps, words: [] }).moves!.length, 1);
+  assert.equal(cameraFromContent({ duration: 60, fps, words: [{ start: 10, end: 20, emphasis: true }] }).moves!.length, 0);
+  // validasi: hold/out sah, out 0 ditolak
+  const h = new History(createProject("t"));
+  assert.equal(h.apply({ type: "setScenes", scenes: [{ title: "a", start: 0, end: 300, camera: { moves: [{ at: 10, dur: 24, zoom: 1.1, hold: 20, out: 24 }] } }] } as never), null);
+  assert.match(String(h.apply({ type: "setScenes", scenes: [{ title: "a", start: 0, end: 300, camera: { moves: [{ at: 10, dur: 24, zoom: 1.1, out: 0 }] } }] } as never)), /out gerak kamera/);
+});
+
+test("kamera: faceAt per gerak mengalahkan face tetap", () => {
+  const cam = cameraFromContent({ duration: 300, fps: 30, words: [{ start: 90, end: 110, emphasis: true }], face: { x: -100, y: 0 }, faceAt: () => ({ x: 120, y: 60 }) });
+  assert.ok(cam.moves![0].x! > 0 && cam.moves![0].y! > 0);
 });

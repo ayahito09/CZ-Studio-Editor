@@ -12,7 +12,7 @@ const HELP = `CZ Studio
   cz open "<folder proyek>"  buka proyek
   cz new "<folder>" [--title "<judul>"] [--video "<file>"] [--skill <id>]
                              buat proyek baru
-  cz skill add "<folder skill atau .zip>"
+  cz skill add "<folder skill, .zip, .skill, atau .plugin>"
   cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores]
   cz models install [--model small-q5_1|small|medium|base]
                              unduh model transkrip lokal (whisper.cpp)
@@ -55,6 +55,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error("--port
 const dataDir = resolve(values.data);
 const { config } = await import("./config.ts");
 config.dataDir = dataDir;
+await (await import("./config.ts")).migrateLibrary();
 
 // Bundel: dist/cli.js + dist/web. Dari sumber: apps/server/src/cli.ts + dist/web (hasil npm run build).
 const here = dirname(fileURLToPath(import.meta.url));
@@ -89,7 +90,8 @@ async function main() {
       // Dipanggil juga oleh postinstall npm: tidak boleh menggagalkan pemasangan.
       if (process.env.CI || process.env.CZ_SKIP_SETUP) { console.log("CZ: pemasangan alat dilewati (CI / CZ_SKIP_SETUP)."); return; }
       const { ensureSetup, setup } = await import("./setup.ts");
-      console.log("CZ Studio: memasang semua alat (ffmpeg, whisper, model transkrip, mesin ekspor, Claude Code)…");
+      (await import("./consent.ts")).setInteractive(cmd === "install" && !!process.stdin.isTTY);
+      console.log("CZ Studio: memasang semua alat (ffmpeg, whisper, model transkrip, mesin ekspor, mesin skrip skill, model wajah/matte, Claude Code)…");
       const shown = new Map<string, string>();
       await ensureSetup(() => {
         for (const st of setup.steps) {
@@ -112,7 +114,7 @@ async function main() {
   }
 
   const { startServer } = await import("./app.ts");
-  const server = await startServer({ port, dataDir, webDir });
+  const server = await startServer({ port, dataDir, webDir, version });
   if (cmd === "open") await server.openFolder(resolve(arg));
   if (cmd === "new") {
     await server.newFolder(resolve(arg), values.title ?? basename(resolve(arg)));

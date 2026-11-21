@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { thumbPlan, type Media } from "@cz/core";
-import { api, mediaUrl, upload, type JobStatus } from "./api.ts";
+import { api, jobFraction, mediaUrl, upload, type JobStatus } from "./api.ts";
+import { Progress } from "./Progress.tsx";
 import { useEd, type Ed } from "./ed.ts";
 import { Icon } from "./icons.tsx";
 import { timecode } from "./store.ts";
@@ -43,14 +44,14 @@ export function MediaPanel({ uploader }: { uploader: ReturnType<typeof useUpload
       <div className="panel__head">
         <h2 id="media-h" className="panel__title">Video <span className="count">{media.length || ""}</span></h2>
         <button className="btn btn--sm-text" onClick={() => fileInput.current?.click()}><Icon name="upload" />Impor</button>
-        <input ref={fileInput} type="file" accept="video/*,.mkv,.mov" multiple hidden
+        <input ref={fileInput} type="file" accept="video/*,.mkv,.mov,.avi,.mts,.m2ts,.mpg,.mpeg,.wmv,.flv,.3gp" multiple hidden
           onChange={(e) => { uploader.start([...(e.target.files ?? [])]); e.target.value = ""; }} />
       </div>
 
       {uploader.items.map((u) => (
         <div key={u.key} className="upload">
           <span className="upload__name">{u.name}</span>
-          <div className="bar"><div className="bar__fill" style={{ width: `${u.progress * 100}%` }} /></div>
+          <Progress value={u.progress} size="sm" />
         </div>
       ))}
 
@@ -123,8 +124,7 @@ function MediaItem({ m, job }: { m: Media; job?: JobStatus }) {
             <span className="media-item__error" title={job?.error}><Icon name="alert" />{job?.error ?? "Gagal"}</span>
           ) : (
             <div className="media-item__job">
-              <span>{STAGE_LABEL[stage]}</span>
-              <div className="bar"><div className="bar__fill" style={{ width: `${Math.round((job?.progress ?? 0) * 100)}%` }} /></div>
+              <Progress value={jobFraction(job)} size="sm" label={STAGE_LABEL[stage]} />
             </div>
           )
         )}

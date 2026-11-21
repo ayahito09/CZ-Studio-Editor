@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import type { PlayerRef } from "@remotion/player";
-import { clipEnd, type NewClip, type Op, type Project } from "@cz/core";
-import { api, type Library, type SessionState, type State } from "./api.ts";
+import { BUILTIN_ASSETS, clipEnd, type NewClip, type Op, type Project } from "@cz/core";
+import { loadSkillRegistry, skillAssetDefs, type Registry } from "@cz/composition";
+import { api, jobFraction, type AutoStep, type Library, type SessionState, type State } from "./api.ts";
+import { etaSec, fmtElapsed, Progress } from "./Progress.tsx";
 import type { Run } from "./App.tsx";
 import { AssetsPanel } from "./AssetsPanel.tsx";
-import { ClaudePanel, ClaudePill } from "./ClaudePanel.tsx";
+import { AutoEditButton, ClaudePanel, ClaudePill } from "./ClaudePanel.tsx";
 import { CutsPanel } from "./CutsPanel.tsx";
 import { EdContext, itemKind, MODES, useEd, type Ed, type InOut, type Mode, type Tool } from "./ed.ts";
 import { PlanPanel, SceneList } from "./PlanPanel.tsx";
 import { RenderPanel, RenderSummary } from "./RenderPanel.tsx";
 import { SettingsDialog } from "./SettingsDialog.tsx";
-import { Icon } from "./icons.tsx";
+import { Icon, type IconName } from "./icons.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { MediaPanel, useUploader } from "./MediaPanel.tsx";
 import { PreviewPlayer } from "./Player.tsx";
@@ -40,6 +42,25 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
     return () => { live = false; };
   }, [skillKey, libTick, doneTasks]);
   const reloadLib = useCallback(() => setLibTick((t) => t + 1), []);
+  // Potongan subjek (mesin matte CZ) per media, untuk "di belakang kepala".
+  const [subjects, setSubjects] = useState<Record<string, string>>({});
+  const [subjTick, setSubjTick] = useState(0);
+  const reloadSubjects = useCallback(() => setSubjTick((t) => t + 1), []);
+  useEffect(() => {
+    let live = true;
+    api.subjects().then((r) => live && setSubjects(r.subjects)).catch(() => {});
+    return () => { live = false; };
+  }, [subjTick, s.folder]);
+  // Komposisi "Aset…" milik skill menjadi aset yang bisa dipasang (isinya dari defaultProps komposisi).
+  const [skillReg, setSkillReg] = useState<Registry | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSkillReg(null);
+    if (lib?.component) loadSkillRegistry(lib.component).then((r) => live && setSkillReg(r)).catch(() => {});
+    return () => { live = false; };
+  }, [lib?.component?.url]);
+  const assetDefs = useMemo(() => [...BUILTIN_ASSETS, ...skillAssetDefs(skillReg, project.sequence), ...(lib?.assets ?? [])],
+    [skillReg, lib, project.sequence]);
   const fps = project.sequence.fps;
   const playhead = useMemo(() => createStore(0), []);
   const playing = useMemo(() => createStore(false), []);
@@ -57,7 +78,7 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
 
   const itemIds = useMemo(() => new Set([...project.clips, ...project.assets, ...project.captions, ...project.scenes].map((x) => x.id)), [project]);
   const ed: Ed = {
-    s, g, project, run, mode, setMode, lib, reloadLib, preview, setPreview, claudeOpen, setClaudeOpen,
+    s, g, project, run, mode, setMode, lib, reloadLib, subjects, reloadSubjects, assetDefs, skillReg, preview, setPreview, claudeOpen, setClaudeOpen,
     op: (op: Op) => run(() => api.op(op)),
     playhead, playing, player,
     seek: (f) => {
@@ -237,6 +258,7 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
           uploader.start([...e.dataTransfer.files]);
         }}>
         <TopBar onHelp={() => setHelp(true)} onSettings={() => setSettingsOpen(true)} />
+        <ModeSteps />
         {mode === "media" && <MediaPanel uploader={uploader} />}
         {mode === "edit" && <AssetsPanel />}
         {mode === "plan" && <SceneList />}
@@ -265,25 +287,73 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
 }
 
 /** Kemajuan rapikan otomatis setelah proyek dibuat. Bisa ditutup setelah selesai. */
+// Bobot kira-kira lama tiap langkah, untuk persen keseluruhan.
+const AUTO_WEIGHT: Record<string, number> = { siapkan: 1, transkrip: 3, jeda: 0.6, subtitle: 0.3, gaya: 5, tata: 5 };
+function autoProgress(steps: AutoStep[]) {
+  let done = 0, total = 0;
+  for (const st of steps) {
+    if (st.state === "dilewati") continue; // langkah yang dilewati tidak makan waktu
+    const w = AUTO_WEIGHT[st.id] ?? 1;
+    total += w;
+    done += w * (st.state === "menunggu" ? 0 : st.state === "berjalan" ? st.progress ?? 0 : 1);
+  }
+  return total ? done / total : 0;
+}
+
+/** Sisa keseluruhan tidak boleh lebih pendek dari sisa langkah yang sedang berjalan. */
+function overallEta(overall: number, since: number, cur: AutoStep | undefined) {
+  const all = etaSec(overall, since);
+  const step = cur?.progress && cur.startedAt ? etaSec(cur.progress, cur.startedAt) : null;
+  return all === null && step === null ? null : Math.max(all ?? 0, step ?? 0);
+}
+
 function AutoCard() {
   const ed = useEd();
   const auto = ed.s.auto;
   const [closed, setClosed] = useState(false);
+  const [small, setSmall] = useState(false);
   useEffect(() => { if (auto?.running) setClosed(false); }, [auto?.running]);
   if (!auto || closed) return null;
   const MARK: Record<string, string> = { selesai: "✓", dilewati: "–", gagal: "!", menunggu: "", berjalan: "" };
+  const overall = auto.running ? autoProgress(auto.steps) : 1;
+  const cur = auto.steps.find((x) => x.state === "berjalan");
+  const claudeStep = cur && (cur.id === "gaya" || cur.id === "tata");
+  const note = ed.s.claudeNote && cur?.startedAt && ed.s.claudeNote.at >= cur.startedAt ? ed.s.claudeNote : null;
+  const focus = ed.s.claudeFocus && cur?.startedAt && ed.s.claudeFocus.at >= cur.startedAt ? ed.s.claudeFocus : null;
+  if (small) return (
+    <button className="autopill" onClick={() => setSmall(false)} aria-label="Tampilkan kemajuan rapikan otomatis">
+      {claudeStep ? <img src="/claude-logo.png" alt="" /> : <span className="spinner" aria-hidden="true" />}
+      <span>{cur?.label ?? "Rapikan otomatis"}</span>
+      <b className="mono">{Math.floor(overall * 100)}%</b>
+    </button>
+  );
   return (
-    <aside className="autocard" aria-live="polite" aria-label="Rapikan otomatis">
+    <aside className={"autocard" + (claudeStep ? " is-claude" : "")} aria-live="polite" aria-label="Rapikan otomatis">
       <div className="autocard__head">
-        <strong>{auto.running ? "Merapikan video…" : "Rapikan otomatis selesai"}</strong>
-        {!auto.running && <button className="btn btn--icon btn--sm" onClick={() => setClosed(true)} aria-label="Tutup"><Icon name="close" /></button>}
+        <strong>{auto.running ? "Merapikan video" : "Rapikan otomatis selesai"}</strong>
+        {auto.running
+          ? <button className="btn btn--icon btn--sm" onClick={() => setSmall(true)} aria-label="Kecilkan supaya linimasa terlihat" data-tip="Kecilkan"><Icon name="minus" /></button>
+          : <button className="btn btn--icon btn--sm" onClick={() => setClosed(true)} aria-label="Tutup"><Icon name="close" /></button>}
       </div>
+      {auto.running && <Progress value={overall} since={auto.startedAt} eta={overallEta(overall, auto.startedAt, cur)} />}
       <ol>
         {auto.steps.map((st) => (
           <li key={st.id} className={`is-${st.state}`}>
             <span className="autocard__mark" aria-hidden="true">{st.state === "berjalan" ? <span className="spinner" /> : MARK[st.state]}</span>
             <span>{st.label}</span>
+            {st.state === "berjalan" && (
+              <div className="autocard__step">
+                <Progress size="sm" value={st.progress ? st.progress : null} since={st.startedAt} />
+                {(st.id === "gaya" || st.id === "tata") && (note || focus) && (
+                  <button className="autocard__live" onClick={() => focus && ed.seek(focus.frame)} disabled={!focus}>
+                    <img src="/claude-logo.png" alt="" />
+                    <span>{focus ? focus.label : note?.text}</span>
+                  </button>
+                )}
+              </div>
+            )}
             {st.note && <small>{st.note}</small>}
+            {st.state !== "berjalan" && st.startedAt && st.endedAt && st.state === "selesai" && <small className="mono">{fmtElapsed((st.endedAt - st.startedAt) / 1000)}</small>}
           </li>
         ))}
       </ol>
@@ -305,27 +375,24 @@ function TopBar({ onHelp, onSettings }: { onHelp: () => void; onSettings: () => 
   };
   const busy = Object.values(s.jobs).filter((j) => j.stage !== "siap" && j.stage !== "gagal").length;
 
+  const mediaPct = busy ? Math.floor(100 * Object.values(s.jobs).filter((j) => j.stage !== "siap" && j.stage !== "gagal").reduce((a, j) => a + jobFraction(j), 0) / busy) : 0;
+
   return (
     <header className="topbar">
-      <button className="btn btn--icon" onClick={() => ed.run(api.close)} aria-label="Kembali ke beranda" title="Beranda">
-        <Icon name="home" />
+      <button className="topbar__home" onClick={() => ed.run(api.close)} aria-label="Kembali ke beranda" data-tip="Beranda">
+        <img src="/logo.png" alt="" />
       </button>
-      <span className="mark" aria-hidden="true">CZ</span>
       <input className="title-input" aria-label="Judul proyek" value={title} maxLength={200}
         onChange={(e) => setTitle(e.target.value)} onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setTitle(s.project.title); e.currentTarget.blur(); } }} />
-      <div className="modes" role="tablist" aria-label="Mode">
-        {MODES.map((m) => (
-          <button key={m.id} role="tab" aria-selected={ed.mode === m.id} className={"modes__btn" + (ed.mode === m.id ? " is-on" : "")} onClick={() => ed.setMode(m.id)}>{m.label}</button>
-        ))}
-      </div>
       <div className="topbar__spacer" />
+      <AutoEditButton />
       <ClaudePill />
       {ed.g.setup?.running && (() => {
         const cur = ed.g.setup.steps.find((x) => x.state === "mengunduh" || x.state === "memeriksa");
         return <span className="chip chip--busy" title="Alat ini dipasang sekali saja"><span className="spinner" aria-hidden="true" />Menyiapkan {cur?.label.split(" (")[0].toLowerCase() ?? "alat"}{cur?.state === "mengunduh" ? ` ${Math.round(cur.progress * 100)}%` : ""}</span>;
       })()}
-      {busy > 0 && <span className="chip chip--busy"><span className="spinner" aria-hidden="true" />Menyiapkan {busy} video</span>}
+      {busy > 0 && <span className="chip chip--busy"><span className="spinner" aria-hidden="true" />Menyiapkan {busy} video · <b className="mono">{mediaPct}%</b></span>}
       <div className="history" role="group" aria-label="Riwayat">
         <button className="btn btn--icon" disabled={!s.undo} onClick={() => ed.run(api.undo)}
           aria-label={s.undo ? `Batalkan: ${s.undo}` : "Batalkan"} data-tip={s.undo ? `Batalkan: ${s.undo} · Ctrl+Z` : "Tidak ada yang dibatalkan"}>
@@ -336,13 +403,30 @@ function TopBar({ onHelp, onSettings }: { onHelp: () => void; onSettings: () => 
           <Icon name="redo" />
         </button>
       </div>
-      <button className="btn btn--icon" onClick={onHelp} aria-label="Pintasan keyboard" data-tip="Pintasan · ?"><Icon name="keyboard" /></button>
-      <button className="btn btn--icon" onClick={onSettings} aria-label="Pengaturan" data-tip="Pengaturan"><Icon name="settings" /></button>
       <button className={"save " + (s.dirty ? "save--dirty" : "")} onClick={() => ed.run(api.save)} data-tip="Simpan sekarang (Ctrl+S). Proyek juga tersimpan sendiri tiap 30 detik.">
         <span className="save__dot" aria-hidden="true" />
         {s.dirty ? "Belum disimpan" : "Tersimpan"}
       </button>
+      <button className="btn btn--icon" onClick={onHelp} aria-label="Pintasan keyboard" data-tip="Pintasan · ?"><Icon name="keyboard" /></button>
+      <button className="btn btn--icon" onClick={onSettings} aria-label="Pengaturan" data-tip="Pengaturan"><Icon name="settings" /></button>
     </header>
   );
 }
 
+const MODE_ICON: Record<string, IconName> = { media: "film", plan: "note", edit: "wand", render: "render" };
+
+/** Alur kerja sebagai empat langkah bernomor di bilah atas: satu tempat untuk berpindah tahap. */
+function ModeSteps() {
+  const ed = useEd();
+  const idx = MODES.findIndex((m) => m.id === ed.mode);
+  return (
+    <nav className="modes" role="tablist" aria-label="Tahap kerja">
+      {MODES.map((m, i) => (
+        <button key={m.id} role="tab" aria-selected={ed.mode === m.id} className={"modes__btn" + (ed.mode === m.id ? " is-on" : "") + (i < idx ? " is-past" : "")} onClick={() => ed.setMode(m.id)}>
+          <Icon name={MODE_ICON[m.id]} />
+          <span>{m.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}

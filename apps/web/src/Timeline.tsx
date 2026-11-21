@@ -456,6 +456,7 @@ export function Timeline() {
                   <div className="tl-marquee" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />
                 )}
                 {tip && <div className="tl-tip mono" style={{ left: tip.x + 14, top: Math.max(0, tip.y - 30) }}>{tip.text}</div>}
+                <ClaudeCursor ppf={ppf} scrollRef={scrollRef} viewWidth={view.width} />
               </div>
             </div>
             <Playhead ppf={ppf} scrollRef={scrollRef} viewWidth={view.width} />
@@ -483,12 +484,17 @@ function TimelineBar() {
         </button>
       </div>
       <div className="tl-bar__group tl-bar__inout mono" aria-live="polite">
-        <span title="Awal bagian bertanda (I)">Dari <b>{i === null ? "--:--:--:--" : timecode(i, fps)}</b></span>
-        <span title="Akhir bagian bertanda (O)">Sampai <b>{o === null ? "--:--:--:--" : timecode(o, fps)}</b></span>
+        {i === null && o === null ? (
+          <span className="tl-bar__hint" title="Tekan I di awal dan O di akhir bagian yang mau diputar ulang, dihapus, atau diekspor">Tandai bagian: <kbd>I</kbd> awal · <kbd>O</kbd> akhir</span>
+        ) : (
+          <span className="tl-bar__range" title="Bagian bertanda">
+            <b>{i === null ? "…" : timecode(i, fps)}</b><span aria-hidden="true">→</span><b>{o === null ? "…" : timecode(o, fps)}</b>
+          </span>
+        )}
         {i !== null && o !== null && o > i && (
           <>
             <button className="btn btn--chip" onClick={() => ed.op({ type: "deleteRange", start: i, end: o, ripple: false })} title="Kosongkan bagian bertanda, celahnya dibiarkan (;)">Kosongkan</button>
-            <button className="btn btn--chip" onClick={() => ed.op({ type: "deleteRange", start: i, end: o, ripple: true })} title="Hapus bagian bertanda dan rapatkan (')">Hapus bagian</button>
+            <button className="btn btn--chip" onClick={() => ed.op({ type: "deleteRange", start: i, end: o, ripple: true })} title="Hapus bagian bertanda dan rapatkan (')">Hapus & rapatkan</button>
           </>
         )}
         {(i !== null || o !== null) && (
@@ -697,11 +703,42 @@ const trackName = (t: Track) => OLD_NAMES[t.name] ?? t.name;
 
 export const toolForKey = (key: string): Tool | null => TOOLS.find((t) => t.key.toLowerCase() === key)?.id ?? null;
 
+/** Kursor Claude: menandai bagian yang sedang ditata Claude, menggulir ke sana, dan (bila diikuti) memindah pratinjau. */
+function ClaudeCursor({ ppf, scrollRef, viewWidth }: { ppf: number; scrollRef: React.RefObject<HTMLDivElement | null>; viewWidth: number }) {
+  const ed = useEd();
+  const f = ed.s.claudeFocus;
+  const working = ed.s.claude.tasks.some((t) => t.state === "berjalan");
+  const [follow, setFollow] = useState(() => loadLocal("cz.followClaude", { on: true }).on);
+  useEffect(() => {
+    if (!f || !working) return;
+    const el = scrollRef.current;
+    const x = f.frame * ppf;
+    if (el && (x < el.scrollLeft || x > el.scrollLeft + viewWidth - 120)) el.scrollTo({ left: Math.max(0, x - viewWidth * 0.25), behavior: "smooth" });
+    if (follow && !ed.playing.get()) ed.seek(f.frame);
+    // Hanya saat Claude mengubah sesuatu yang baru, bukan tiap render.
+  }, [f?.at, working]);
+  if (!f || !working) return null;
+  const toggle = () => { setFollow(!follow); saveLocal("cz.followClaude", { on: !follow }); };
+  return (
+    <div className="ccursor" style={{ left: f.frame * ppf, width: Math.max(2, (f.end - f.frame) * ppf) }} aria-live="polite">
+      <div className="ccursor__band" aria-hidden="true" />
+      <div className="ccursor__pin" onPointerDown={(e) => e.stopPropagation()}>
+        <img src="/claude-logo.png" alt="Claude" />
+        <span className="ccursor__say">{f.label}</span>
+        <button className={"ccursor__follow" + (follow ? " is-on" : "")} onClick={toggle} aria-pressed={follow}
+          title="Pratinjau ikut pindah ke bagian yang sedang dikerjakan Claude">{follow ? "Mengikuti" : "Ikuti"}</button>
+      </div>
+    </div>
+  );
+}
+
 /** Scene, aset, caption, dan wilayah potongan pada satu lane. */
 function Items({ t, p, ppf }: { t: Track; p: Project; ppf: number }) {
   const ed = useEd();
-  const sel = (id: string) => (ed.selection.has(id) ? " is-selected" : "");
-  const names = new Map((ed.lib?.assets ?? []).map((d) => [d.id, d.name]));
+  // Item yang baru diubah Claude berkedip sekali (animasi jalan saat kelasnya ditambahkan).
+  const touched = new Set(ed.s.claudeFocus?.ids ?? []);
+  const sel = (id: string) => (ed.selection.has(id) ? " is-selected" : "") + (touched.has(id) ? " is-claude" : "");
+  const names = new Map(ed.assetDefs.map((d) => [d.id, d.name]));
   if (t.kind === "scene") {
     return <>{p.scenes.map((s, i) => (
       <div key={s.id} data-item={s.id} className={"item item--scene" + sel(s.id) + (s.status === "dikunci" ? " is-locked" : "")}
@@ -717,7 +754,7 @@ function Items({ t, p, ppf }: { t: Track; p: Project; ppf: number }) {
         title={c.words.map((w) => w.text).join(" ")}>
         {c.words.map((w, i) => ((w.end - w.start) * ppf > 12 ? (
           <span key={i} data-word={i} className={"word-box" + (w.style !== "normal" ? ` word-box--${w.style}` : "")}
-            style={{ left: (w.start - c.start) * ppf, width: (w.end - w.start) * ppf }}>{(w.end - w.start) * ppf > 26 ? w.text : ""}</span>
+            style={{ left: (w.start - c.start) * ppf, width: (w.end - w.start) * ppf }}>{(w.end - w.start) * ppf > 34 ? w.text : ""}</span>
         ) : null))}
       </div>
     ))}</>;

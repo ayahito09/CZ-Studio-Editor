@@ -1,4 +1,5 @@
 // Transkrip per kata secara lokal dengan whisper.cpp. Audio tidak pernah keluar dari komputer.
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
@@ -10,6 +11,15 @@ import { run } from "./media.ts";
 
 /** Ukuran unduhan (MB). small-q5_1 = model small yang dipadatkan: ketepatan hampir sama, kurang dari separuh ukuran. */
 export const MODELS = { base: 148, "small-q5_1": 190, small: 488, medium: 1530 } as const;
+/** SHA-256 dan ukuran model ggml, dari metadata LFS resmi ggerganov/whisper.cpp di Hugging Face. */
+const MODEL_CHECK: Record<keyof typeof MODELS, Expect> = {
+  base: { sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", size: 147951465 },
+  "small-q5_1": { sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb", size: 190085487 },
+  small: { sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", size: 487601967 },
+  medium: { sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208", size: 1533763059 },
+};
+/** whisper-cli Windows: rilis b5907 (dikunci, tidak mengikuti "terbaru"); hash dihitung dari unduhan resmi. */
+const WHISPER_BIN = { url: "https://github.com/ggml-org/whisper.cpp/releases/download/b5907/whisper-bin-x64.zip", expect: { sha256: "ecca07b277d943e9b9f4712856a144b857271a6b333104e511e1988e80db582b", size: 9168428 } };
 export type ModelName = keyof typeof MODELS;
 export const DEFAULT_MODEL: ModelName = "small-q5_1";
 
@@ -48,19 +58,30 @@ export async function engineStatus() {
 }
 
 /** Unduh ke dest (lewat .part). Tanpa onProgress: kemajuan dicetak ke terminal. */
-export async function download(url: string, dest: string, label: string, onProgress?: (p: number) => void) {
+/** Hasil unduhan yang diharapkan: SHA-256 (hex) dan/atau ukuran byte. Tidak cocok = file dibuang dan pemasangan gagal. */
+export interface Expect { sha256?: string; size?: number }
+
+export async function download(url: string, dest: string, label: string, onProgress?: (p: number) => void, expect?: Expect) {
+  if (!url.startsWith("https://")) throw new Error(`Unduhan ${label} harus lewat https`);
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) throw new Error(`Gagal mengunduh ${label} (${res.status})`);
   const total = Number(res.headers.get("content-length") ?? 0);
   let got = 0, shown = -1;
+  const hash = createHash("sha256");
   const body = Readable.fromWeb(res.body as never);
   body.on("data", (c: Buffer) => {
+    hash.update(c);
     got += c.length;
     const pct = total ? Math.floor((got / total) * 100) : -1;
     if (onProgress) { if (total) onProgress(got / total); return; }
     if (pct !== shown && pct % 5 === 0) { shown = pct; process.stdout.write(`\r${label}: ${pct}% `); }
   });
-  await pipeline(body, createWriteStream(dest + ".part"));
+  try {
+    await pipeline(body, createWriteStream(dest + ".part"));
+    if (total && got !== total) throw new Error(`Unduhan ${label} terputus (${got} dari ${total} byte)`);
+    if (expect?.size !== undefined && got !== expect.size) throw new Error(`Ukuran ${label} tidak cocok (${got}, seharusnya ${expect.size})`);
+    if (expect?.sha256 && hash.digest("hex") !== expect.sha256) throw new Error(`${label} gagal diverifikasi: isinya tidak sama dengan yang diharapkan (SHA-256). File dibuang.`);
+  } catch (e) { await rm(dest + ".part", { force: true }); throw e; }
   await rename(dest + ".part", dest);
   if (!onProgress) process.stdout.write(`\r${label}: selesai        \n`);
 }
@@ -76,7 +97,7 @@ export function unzip(zip: string, dir: string) {
 export async function installModel(model: ModelName = DEFAULT_MODEL, onProgress?: (p: number) => void) {
   await mkdir(modelDir(), { recursive: true });
   const mf = join(modelDir(), `ggml-${model}.bin`);
-  if (!existsSync(mf)) await download(`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin`, mf, `Model ${model} (~${MODELS[model]} MB)`, onProgress);
+  if (!existsSync(mf)) await download(`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin`, mf, `Model ${model} (~${MODELS[model]} MB)`, onProgress, MODEL_CHECK[model]);
   return mf;
 }
 
@@ -84,12 +105,9 @@ export async function installModel(model: ModelName = DEFAULT_MODEL, onProgress?
 export async function installWhisper(onProgress?: (p: number) => void) {
   if (await findWhisper()) return;
   if (process.platform !== "win32") throw new Error("Pasang whisper-cli lewat paket sistem (mis. brew install whisper-cpp)");
-  const rel = await fetch("https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10").then((r) => r.json()) as { assets?: { name: string; browser_download_url: string }[] }[];
-  const asset = rel.flatMap((r) => r.assets ?? []).find((a) => a.name === "whisper-bin-x64.zip");
-  if (!asset) throw new Error("Biner whisper.cpp untuk Windows tidak ditemukan di rilis terbaru");
   await mkdir(binDir(), { recursive: true });
   const zip = join(binDir(), "whisper.zip");
-  await download(asset.browser_download_url, zip, "whisper-cli", onProgress);
+  await download(WHISPER_BIN.url, zip, "whisper-cli", onProgress, WHISPER_BIN.expect);
   try { unzip(zip, binDir()); } finally { await rm(zip, { force: true }); }
   if (!(await findWhisper())) throw new Error("whisper-cli.exe tidak ada di dalam arsip");
 }

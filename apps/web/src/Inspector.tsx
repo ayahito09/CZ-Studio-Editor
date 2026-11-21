@@ -1,3 +1,5 @@
+import { SafeAreaSection } from "./SafeAreaSection.tsx";
+import { CameraSection } from "./CameraSection.tsx";
 import { useEffect, useState, type CSSProperties } from "react";
 import { clipLen, FPS_CHOICES, SEQUENCE_PRESETS, type Clip } from "@cz/core";
 import { useEd } from "./ed.ts";
@@ -144,6 +146,8 @@ function ClipInspector({ c }: { c: Clip }) {
           <Icon name="trash" />Hapus dan rapatkan
         </button>
       </div>
+      {!audio && <CameraSection clips={[c]} />}
+      {!audio && <SafeAreaSection clips={[c]} />}
     </>
   );
 }
@@ -165,6 +169,8 @@ function MultiInspector({ clips }: { clips: Clip[] }) {
         <button className="btn" onClick={() => ed.op({ type: "unlink", clipIds: ids })}>Pisahkan</button>
         <button className="btn" onClick={() => ed.op({ type: "deleteClips", clipIds: ids, ripple: false })} title="Delete"><Icon name="trash" />Hapus</button>
       </div>
+      <CameraSection clips={clips} />
+      <SafeAreaSection clips={clips} />
     </>
   );
 }

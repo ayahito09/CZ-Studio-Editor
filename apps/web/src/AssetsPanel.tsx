@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Thumbnail } from "@remotion/player";
+import { Player, Thumbnail } from "@remotion/player";
 import { buildCaptions, instantiate, type AssetDef, type NewAsset } from "@cz/core";
 import { AssetPreview } from "@cz/composition";
 import { api, uploadSkill, type SkillMeta } from "./api.ts";
@@ -10,13 +10,14 @@ import { Icon } from "./icons.tsx";
 export const ASSET_DRAG = "application/x-cz-asset";
 export const FREE_TEXT = "__teks__";
 
-/** Instans baru dari definisi (atau teks bebas) di frame dan posisi tertentu. */
+/** Instans baru dari definisi di frame dan posisi tertentu. Teks bebas = Judul bergerak (kode), bukan teks diam. */
 export function newAssetFor(ed: Ed, defId: string, start: number, at?: { x: number; y: number }): NewAsset {
   const p = ed.project;
-  const def = ed.lib?.assets.find((d) => d.id === defId);
-  const base: NewAsset = def
-    ? instantiate(def, ed.lib?.template?.tokens ?? {}, { start, fps: p.sequence.fps, seq: p.sequence })
-    : { defId: null, start, duration: p.sequence.fps * 3, params: { text: "Teks baru" }, anim: { in: "blurRise", out: "blurFade" } };
+  const def = ed.assetDefs.find((d) => d.id === (defId === FREE_TEXT ? "cz.teks" : defId)) ?? ed.assetDefs[0];
+  const base = instantiate(def, ed.lib?.template?.tokens ?? {}, { start, fps: p.sequence.fps, seq: p.sequence });
+  // Param video (b-roll) langsung diisi video pertama proyek supaya langsung terlihat bergerak.
+  const media = Object.entries(def.params).find(([, pd]) => pd.type === "media")?.[0];
+  if (media && p.media[0]) base.params = { ...base.params, [media]: p.media[0].id };
   return at ? { ...base, transform: { ...(base.transform ?? { scale: 1, rotation: 0, opacity: 1 }), x: Math.round(at.x), y: Math.round(at.y) } as NewAsset["transform"] } : base;
 }
 
@@ -25,7 +26,7 @@ export function AssetsPanel() {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("semua");
   const claude = useClaudeAction();
-  const defs = ed.lib?.assets ?? [];
+  const defs = ed.assetDefs;
   const cats = ["semua", ...new Set(defs.map((d) => d.category))];
   const shown = defs.filter((d) => (cat === "semua" || d.category === cat) && (!q || (d.name + d.id).toLowerCase().includes(q.toLowerCase())));
   const addAt = (defId: string) => ed.op({ type: "addAssets", assets: [newAssetFor(ed, defId, ed.playhead.get())] });
@@ -36,46 +37,56 @@ export function AssetsPanel() {
       <div className="panel__head">
         <h2 id="assets-h" className="panel__title">Elemen <span className="count">{defs.length || ""}</span></h2>
       </div>
-      <div className="row row--wrap">
+      <div className="elem-acts">
         <button className="btn btn--sm-text" disabled={!ed.project.transcript.words.length}
           onClick={() => ed.op({ type: "setCaptions", captions: buildCaptions(ed.project, ed.lib?.template?.caption.wordsPerLine ?? 4) })}
           title={ed.project.captions.length ? "Mengganti subtitle yang ada" : "Subtitle per kata, mengikuti ucapan"}>
-          <Icon name="text" />{ed.project.captions.length ? "Buat ulang subtitle" : "Buat subtitle"}
+          <Icon name="text" />{ed.project.captions.length ? "Ulang subtitle" : "Buat subtitle"}
         </button>
-        <button className="btn btn--sm-text" disabled={!defs.length} onClick={() => claude("auto-assets")}><Icon name="wand" />Pasang sesuai ucapan</button>
+        <button className="btn btn--sm-text" disabled={!ed.project.transcript.words.length} title="Claude memasang elemen bergerak di kata pemicunya"
+          onClick={() => claude("auto-assets")}><Icon name="wand" />Pasang AI</button>
       </div>
       {defs.length > 6 && (
-        <div className="row">
+        <div className="elem-find">
           <input className="search" placeholder="Cari elemen" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Cari elemen" />
-          <select value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Kategori">{cats.map((c) => <option key={c}>{c}</option>)}</select>
+        </div>
+      )}
+      {cats.length > 2 && (
+        <div className="cat-chips" role="radiogroup" aria-label="Kategori">
+          {cats.map((c) => (
+            <button key={c} type="button" role="radio" aria-checked={cat === c} className={"cat-chip" + (cat === c ? " is-on" : "")} onClick={() => setCat(c)}>
+              {c === "semua" ? "Semua" : c}
+              <span className="cat-chip__n">{c === "semua" ? defs.length : defs.filter((d) => d.category === c).length}</span>
+            </button>
+          ))}
         </div>
       )}
       <ul className="asset-grid">
-        <li>
-          <button className="asset-card asset-card--free" draggable onDragStart={(e) => e.dataTransfer.setData(ASSET_DRAG, FREE_TEXT)} onClick={() => addAt(FREE_TEXT)}
-            title="Teks bebas · seret ke pratinjau atau linimasa, atau klik untuk menaruh di posisi sekarang">
-            <span className="asset-card__thumb asset-card__thumb--free">Aa</span>
-            <span className="asset-card__name">Teks bebas</span>
-          </button>
-        </li>
         {shown.map((d) => <AssetCard key={d.id} def={d} onAdd={() => addAt(d.id)} />)}
       </ul>
-      {!ed.lib && <p className="hint">Pilih gaya edit di atas supaya pilihan elemennya muncul.</p>}
+      {!ed.lib && <p className="hint">Elemen gaya edit (kartu, mockup, ilustrasi khas skill) muncul di sini setelah kamu memilih gaya edit.</p>}
     </aside>
   );
 }
 
+/** Kartu aset: diam di pose tengahnya, dan bergerak (berulang) saat disorot supaya geraknya terlihat sebelum dipasang. */
 function AssetCard({ def, onAdd }: { def: AssetDef; onAdd: () => void }) {
   const ed = useEd();
+  const [hover, setHover] = useState(false);
   const lib = useMemo(() => (ed.lib ? { template: ed.lib.template, assets: ed.lib.assets, base: ed.lib.base } : null), [ed.lib]);
-  const props = useMemo(() => ({ def, lib, width: 1080, height: 1080 }), [def, lib]);
+  const props = useMemo(() => ({ def, lib, width: 1080, height: 1080, reg: ed.skillReg }), [def, lib, ed.skillReg]);
+  const dur = Math.max(30, Math.round((def.duration ?? 3) * 30));
   return (
     <li>
       <button className="asset-card" draggable onDragStart={(e) => { e.dataTransfer.setData(ASSET_DRAG, def.id); e.dataTransfer.effectAllowed = "copy"; }}
-        onClick={onAdd} title={`${def.name}${def.trigger ? `\nDipakai saat: ${def.trigger}` : ""}${def.license ? `\nLisensi: ${def.license}` : ""}\nSeret ke pratinjau atau linimasa, atau klik untuk menaruh di posisi sekarang`}>
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onFocus={() => setHover(true)} onBlur={() => setHover(false)}
+        onClick={onAdd} title={`${def.name}${def.description ? `\n${def.description}` : ""}${def.trigger ? `\nDipakai saat: ${def.trigger}` : ""}${def.license ? `\nLisensi: ${def.license}` : ""}\nSeret ke pratinjau atau linimasa, atau klik untuk menaruh di posisi sekarang`}>
         <span className="asset-card__thumb">
-          <Thumbnail component={AssetPreview} inputProps={props} compositionWidth={1080} compositionHeight={1080} durationInFrames={90} fps={30}
-            frameToDisplay={30} style={{ width: "100%", height: "100%" }} />
+          {hover
+            ? <Player component={AssetPreview} inputProps={props} compositionWidth={1080} compositionHeight={1080} durationInFrames={dur} fps={30}
+                autoPlay loop controls={false} clickToPlay={false} style={{ width: "100%", height: "100%" }} />
+            : <Thumbnail component={AssetPreview} inputProps={props} compositionWidth={1080} compositionHeight={1080} durationInFrames={dur} fps={30}
+                frameToDisplay={Math.round(dur * 0.55)} style={{ width: "100%", height: "100%" }} />}
         </span>
         <span className="asset-card__name">{def.name}</span>
         <span className="asset-card__cat">{def.category}</span>
@@ -141,7 +152,7 @@ function SkillBox() {
   };
   const fromInput = (list: FileList | null) => install([...(list ?? [])].map((f) => ({ path: f.webkitRelativePath || f.name, file: f })).filter((x) => !skipped(x.path)));
   const generate = async () => {
-    if (!cur || !confirm("Siapkan gaya edit dengan Claude?\nPerkiraan besar pekerjaan: besar (Claude membaca seluruh panduan gaya lalu membuat elemennya).")) return;
+    if (!cur || !confirm("Siapkan gaya edit dengan Claude?\nPerkiraan besar pekerjaan: besar (Claude membaca seluruh panduan gaya lalu menulis mesin gaya edit dalam kode: setiap elemen beranimasi, bukan gambar diam).")) return;
     ed.setClaudeOpen(true);
     await ed.run(() => api.generateSkill(cur.id, cur.version));
   };
@@ -162,16 +173,16 @@ function SkillBox() {
         {progress ? <span className="skill-drop__busy"><span className="spinner" aria-hidden="true" />{progress}</span> : (
           <>
             <Icon name="upload" />
-            <span>Seret folder gaya edit atau file .zip ke sini</span>
+            <span title="Folder, .zip, .skill, .plugin, atau .md">Seret gaya edit ke sini</span>
             <span className="skill-drop__pick">
               <button type="button" className="link-btn" onClick={() => folderInput.current?.click()}>Pilih folder</button>
               <span aria-hidden="true">·</span>
-              <button type="button" className="link-btn" onClick={() => zipInput.current?.click()}>Pilih .zip</button>
+              <button type="button" className="link-btn" onClick={() => zipInput.current?.click()}>Pilih file</button>
             </span>
           </>
         )}
         <input ref={folderInput} type="file" hidden {...{ webkitdirectory: "", directory: "" }} onChange={(e) => { fromInput(e.target.files); e.target.value = ""; }} />
-        <input ref={zipInput} type="file" accept=".zip" hidden onChange={(e) => { fromInput(e.target.files); e.target.value = ""; }} />
+        <input ref={zipInput} type="file" accept=".zip,.skill,.plugin,.md" hidden onChange={(e) => { fromInput(e.target.files); e.target.value = ""; }} />
       </div>
       <select value={cur ? `${cur.id}@${cur.version}` : ""} aria-label="Gaya edit proyek"
         onChange={(e) => { const [id, v] = e.target.value.split("@"); ed.run(() => api.useSkill(id || null, Number(v))); }}>
@@ -185,15 +196,13 @@ function SkillBox() {
       {cur && generated && (
         <div className="row row--wrap">
           <button className="btn btn--sm-text" onClick={() => setReview(!review)}>{review ? "Tutup" : "Lihat isi gaya"}</button>
-          <button className="btn btn--sm-text" onClick={generate} disabled={running}>Siapkan ulang</button>
         </div>
       )}
       {review && ed.lib && (
         <div className="template-review">
           {ed.lib.warnings.length > 0 && <div className="notice notice--warn"><strong>Peringatan</strong><ul>{ed.lib.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>}
           <strong>Pilihan tampilan</strong>
-          <ul className="plain">{ed.lib.template?.stylePresets.map((p) => <li key={p.id}><b>{p.name}</b>{p.description ? ` — ${p.description}` : ""}</li>)}</ul>
-          {!!ed.lib.template?.controls?.length && <><strong>Pengaturan tambahan</strong><ul className="plain">{ed.lib.template.controls.map((c) => <li key={c.id}>{c.group ? `${c.group} · ` : ""}{c.label}</li>)}</ul></>}
+          <ul className="plain">{ed.lib.styleOptions.map((o) => <li key={o.label}><b>{o.label}</b> — {o.ids.join(", ")}</li>)}</ul>
           <form className="path-form" onSubmit={(e) => { e.preventDefault(); if (cur && editText.trim()) { ed.setClaudeOpen(true); ed.run(() => api.editSkill(cur.id, cur.version, editText)).then(() => setEditText("")); } }}>
             <label className="field"><span>Minta Claude mengubah gaya (disimpan sebagai versi baru)</span>
               <input value={editText} onChange={(e) => setEditText(e.target.value)} placeholder="buat kartu harga lebih bulat" /></label>

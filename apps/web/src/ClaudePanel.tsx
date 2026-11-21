@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, type ClaudeTask } from "./api.ts";
+import { api, CLAUDE_EFFORTS, CLAUDE_MODELS, type ClaudeTask } from "./api.ts";
 import { useEd } from "./ed.ts";
 import { Icon } from "./icons.tsx";
+import { Progress } from "./Progress.tsx";
+
+/** Kemajuan tugas Claude: angka dari cz_set_status bila Claude melaporkannya, selain itu waktu berjalan. */
+function TaskProgress({ t }: { t: ClaudeTask }) {
+  const note = useEd().s.claudeNote;
+  const fresh = note && t.startedAt && note.at >= t.startedAt ? note : null;
+  return <Progress size="sm" value={fresh?.progress ?? null} since={t.startedAt} label={fresh?.text} />;
+}
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   "terhubung": { label: "Claude", cls: "ok" },
@@ -27,16 +35,54 @@ export function ClaudePill() {
   );
 }
 
+const SOURCE_KEY = "cz.claudeSource";
+const SOURCE_ACTIONS = ["plan", "auto-style", "auto-assets"];
+type Source = "ada" | "skill";
+const readSource = (): Source => { try { return localStorage.getItem(SOURCE_KEY) === "skill" ? "skill" : "ada"; } catch { return "ada"; } };
+
+/** Pilihan sumber elemen untuk proyek bergaya skill: elemen yang sudah ada dulu, atau dibuat dari skill. */
+export function SourceSelect() {
+  const ed = useEd();
+  const [v, setV] = useState<Source>(readSource);
+  if (!ed.project.skill) return null;
+  return (
+    <select className="newcard__sel" value={v} aria-label="Sumber elemen" title="Elemen yang sudah ada: Claude memakai elemen yang tersedia sesuai isi video tanpa mengubah skill. Dari skill: Claude membaca skill dan membuat berdasarkan skill."
+      onChange={(e) => { const n = e.target.value as Source; setV(n); try { localStorage.setItem(SOURCE_KEY, n); } catch { /* tanpa penyimpanan: pilihan berlaku sesi ini saja */ } }}>
+      <option value="ada">Pakai elemen yang ada</option>
+      <option value="skill">Buat dari skill</option>
+    </select>
+  );
+}
+
 /** Aksi Claude yang dipakai dari panel lain: tampilkan perkiraan ukuran tugas dulu (kuota milik user). */
 export function useClaudeAction() {
   const ed = useEd();
   return async (action: string, text = "") => {
     if (ed.g.claude.state === "tidak-terpasang") { ed.setClaudeOpen(true); return false; }
     const est = await api.claudeEstimate(action).catch(() => ({ text: "" }));
-    if (action !== "ask" && !confirm(`Minta Claude mengerjakan ini?\nPerkiraan besar pekerjaan: ${est.text}`)) return false;
+    const source = ed.project.skill && SOURCE_ACTIONS.includes(action) ? readSource() : undefined;
+    const how = source ? `\nSumber elemen: ${source === "ada" ? "pakai elemen yang sudah ada" : "dibuat dari skill"}` : "";
+    if (action !== "ask" && !confirm(`Minta Claude mengerjakan ini?\nPerkiraan besar pekerjaan: ${est.text}${how}`)) return false;
     ed.setClaudeOpen(true);
-    return ed.run(() => api.claudeRun(action, text));
+    return ed.run(() => api.claudeRun(action, text, source));
   };
+}
+
+/** Satu tombol di atas video: Claude menata seluruh video dari isinya (bagian, subtitle + gaya, elemen, gerak, kamera, transisi, SFX). */
+export function AutoEditButton() {
+  const ed = useEd();
+  const claude = useClaudeAction();
+  const busy = ed.s.claude.tasks.some((t) => t.state === "berjalan" || t.state === "antre");
+  const ready = ed.project.transcript.words.length > 0;
+  return (
+    <>
+      <SourceSelect />
+      <button className="btn btn--primary btn--sm-text" disabled={!ready || busy} onClick={() => claude("auto-style")}
+        title={!ready ? "Buat transkrip dulu di tahap Bahan" : busy ? "Claude sedang mengerjakan tugas lain" : "Claude memasang subtitle, elemen, motion graphic, efek, kamera, transisi, dan efek suara sesuai isi video. Bisa dibatalkan dengan Ctrl+Z."}>
+        <Icon name="wand" />{busy ? "Claude sedang bekerja…" : "Edit otomatis dengan AI"}
+      </button>
+    </>
+  );
 }
 
 export function ClaudePanel() {
@@ -109,6 +155,7 @@ export function ClaudePanel() {
       </div>
 
       <div className="claude__quick">
+        <SourceSelect />
         {[["cuts", "Usulkan potongan"], ["plan", "Buat rencana"], ["revise", "Kerjakan catatan"], ["auto-assets", "Pasang elemen sesuai ucapan"]].map(([a, l]) => (
           <button key={a} className="btn btn--chip" onClick={() => runAction(a)}>{l}</button>
         ))}
@@ -116,9 +163,22 @@ export function ClaudePanel() {
       <form className="claude__input" onSubmit={send}>
         <textarea rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder="Tulis permintaan…  (Ctrl+Enter kirim)" aria-label="Pesan ke Claude"
           onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(e); }} />
-        {last && (last.state === "berjalan" || last.state === "antre")
-          ? <button type="button" className="btn" onClick={() => ed.run(() => api.claudeStop())}><Icon name="stop" />Hentikan</button>
-          : <button type="submit" className="btn btn--primary" disabled={!text.trim()}><Icon name="send" />Kirim</button>}
+        <div className="claude__send">
+          <label className="claude__model" title="Model untuk tugas Claude berikutnya (juga diatur di Pengaturan)">
+            <img src="/claude-logo.png" alt="" />
+            <select value={ed.g.settings.claudeModel ?? ""} aria-label="Model Claude" onChange={(e) => ed.run(() => api.settings({ claudeModel: e.target.value }))}>
+              {CLAUDE_MODELS.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </label>
+          <label className="claude__model" title="Effort untuk tugas Claude berikutnya: makin tinggi makin teliti dan makin banyak kuota">
+            <select value={ed.g.settings.claudeEffort ?? ""} aria-label="Effort Claude" onChange={(e) => ed.run(() => api.settings({ claudeEffort: e.target.value }))}>
+              {CLAUDE_EFFORTS.map((m) => <option key={m.id} value={m.id}>{m.id ? m.name : "Effort"}</option>)}
+            </select>
+          </label>
+          {last && (last.state === "berjalan" || last.state === "antre")
+            ? <button type="button" className="btn" onClick={() => ed.run(() => api.claudeStop())}><Icon name="stop" />Hentikan</button>
+            : <button type="submit" className="btn btn--primary" disabled={!text.trim()}><Icon name="send" />Kirim</button>}
+        </div>
       </form>
     </aside>
   );
@@ -128,8 +188,9 @@ export function ClaudePanel() {
 const TOOL_LABEL: Record<string, string> = {
   cz_get_project: "Membaca proyek", cz_get_timeline: "Membaca linimasa", cz_get_transcript: "Membaca transkrip", cz_get_frame: "Melihat gambar dari video",
   cz_propose_cuts: "Mengusulkan potongan", cz_apply_cuts: "Memotong video", cz_set_scenes: "Menyusun rencana", cz_update_scene: "Mengubah bagian",
-  cz_list_assets: "Melihat pilihan elemen", cz_add_asset: "Menambah elemen", cz_update_asset: "Mengubah elemen", cz_remove_asset: "Menghapus elemen",
-  cz_set_caption: "Mengatur subtitle", cz_save_template: "Menyimpan gaya edit", cz_save_asset_def: "Menyimpan elemen gaya", cz_reply_note: "Membalas catatan",
+  cz_list_assets: "Melihat pilihan elemen", cz_get_media_frames: "Melihat isi video B-roll", cz_add_asset: "Memasang elemen bergerak", cz_update_asset: "Mengubah elemen", cz_remove_asset: "Menghapus elemen", cz_set_scene_skill: "Menggambar bagian",
+  cz_write_skill_file: "Menulis mesin gaya edit", cz_build_skill_component: "Menyusun mesin gaya edit", cz_run_skill_script: "Menjalankan alat gaya edit",
+  cz_set_caption: "Mengatur subtitle", cz_reply_note: "Membalas catatan",
   cz_add_note: "Menambah catatan", cz_set_note_status: "Menandai catatan", cz_render: "Memulai ekspor", cz_set_status: "Melaporkan kemajuan",
   Read: "Membaca panduan gaya", Glob: "Membaca panduan gaya", Grep: "Membaca panduan gaya",
 };
@@ -143,6 +204,7 @@ function TaskView({ t }: { t: ClaudeTask }) {
         <strong>{t.label}</strong>
         <span className="task__state">{t.state === "berjalan" && <span className="spinner" aria-hidden="true" />}{stateLabel}</span>
       </header>
+      {t.state === "berjalan" && <TaskProgress t={t} />}
       {t.log.filter((l) => l.kind !== "user").map((l, i) => (
         <p key={i} className={`log log--${l.kind}`}>
           {l.kind === "tool" && <Icon name="wand" />}

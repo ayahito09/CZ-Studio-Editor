@@ -1,12 +1,21 @@
 // Alat MCP cz_* untuk Claude. Setiap perubahan lewat Op yang sama dengan UI (validasi + riwayat sumber "claude").
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
-  buildCaptions, instantiate, wordFrames, type AssetDef, type Op, type Project,
+  assetBox, BUILTIN_ASSETS, buildCaptions, cameraFromContent, CURVES, faceToSeq, instantiate, placementIssues, placementY, SKILL_ASSET, skillAssetDef, skillAssetId, TRANSITIONS, wordFrames,
+  type AssetInstance, type Box, type Op, type Project,
 } from "@cz/core";
+import { derived, mediaFile, run } from "./media.ts";
 import { stillFrame, renderQueue } from "./render.ts";
 import type { Session } from "./session.ts";
-import { saveAssetDef, saveTemplate } from "./skills.ts";
+import { buildReport, writeSkillFile } from "./skillCode.ts";
+import { runSkillScript, skillCompositionIds } from "./skillScripts.ts";
+import { detectFaces } from "./faces.ts";
+import { skillDataDir, skillMedia, versionDir } from "./skills.ts";
+
+/** Data gerak scene untuk renderer CZ sendiri (scene tanpa komposisi skill). */
+const SCENE_MOTION = `camera = mesin kamera aditif {moves: [{at, dur (frame relatif awal scene), x, y (px), zoom (pengali, 1.15 = dorong 15%), rot, ease, hold (frame bertahan di puncak), out (frame kembali ke posisi semula; WAJIB diisi supaya zoom tidak menumpuk dan scene berakhir di bingkai awal)}], shake: [{at, dur, amp}], drift (bawaan true: napas zoom halus, kamera tidak pernah diam)}; gerak yang tumpang tindih dijumlahkan, jadi mulai gerak berikutnya di 55-75% gerak sebelumnya. transition = transisi MASUK scene ini {kind: ${TRANSITIONS.join("|")}, frames}. ease: ${CURVES.join("|")}.`;
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 type Args = Record<string, unknown>;
@@ -16,6 +25,79 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
 const S = { type: "string" }, N = { type: "number" }, I = { type: "integer" }, O = { type: "object" }, B = { type: "boolean" };
 const arr = (items: unknown) => ({ type: "array", items });
 const json = (v: unknown) => JSON.stringify(v);
+
+// ---------- Penempatan elemen: lihat video dulu, jangan menutupi wajah, tetap di area aman ----------
+/** Frame sequence yang sudah dilihat Claude (cz_get_frame) per sesi, dengan waktu dilihat. */
+const viewed = new WeakMap<Session, Map<number, number>>();
+const LOOK_FRESH_MS = 30 * 60_000;
+
+/** Kotak wajah di sequence pada frame f: dari faces.json hasil analisis skill (bila ada) untuk klip video yang tampil. */
+async function faceAt(s: Session, f: number): Promise<Box | null> {
+  const p = s.history.project;
+  const clip = p.clips.find((c) => c.trackId === "V1" && f >= c.start && f < c.start + Math.round((c.srcOut - c.srcIn) * p.sequence.fps));
+  const media = clip && p.media.find((m) => m.id === clip.mediaId);
+  if (!clip || !media) return null;
+  const faces = (await skillMedia(s.folder, [media.id]))[media.id]?.faces as number[][] | undefined;
+  if (!faces?.length) return null;
+  const t = clip.srcIn + (f - clip.start) / p.sequence.fps;
+  const near = faces.filter((x) => Array.isArray(x) && Math.abs(x[0] - t) <= 0.6).sort((a, b) => Math.abs(a[0] - t) - Math.abs(b[0] - t))[0];
+  return near ? faceToSeq({ x: near[1], y: near[2], w: near[3], h: near[4] }, media, p.sequence) : null;
+}
+
+/** Kamera tiap scene dari isi ucapannya: dorong ke wajah di kata yang ditekankan, tahan, lalu keluar. Scene skill dilewati (kameranya milik skill). */
+export async function autoCameraOp(s: Session, ids?: string[]): Promise<Op | string> {
+  let p = s.history.project;
+  // Mesin wajah CZ: pastikan setiap video punya hasil deteksi (dibuat sekali, lalu dipakai ulang).
+  await Promise.all(p.media.filter((m) => m.width > 0).map((m) => detectFaces(s.folder, m).catch(() => false)));
+  p = s.history.project;
+  const fps = p.sequence.fps, wf = wordFrames(p);
+  const faceData = await skillMedia(s.folder, p.media.map((m) => m.id));
+  /** Pusat wajah (selisih px dari tengah sequence) pada frame sequence f; null bila tidak ada data. */
+  const faceCenter = (f: number) => {
+    const clip = p.clips.find((c) => c.trackId === "V1" && f >= c.start && f < c.start + Math.round((c.srcOut - c.srcIn) * fps));
+    const media = clip && p.media.find((m) => m.id === clip.mediaId);
+    const list = media && (faceData[media.id]?.faces as number[][] | undefined);
+    if (!clip || !media || !list?.length) return null;
+    const t = clip.srcIn + (f - clip.start) / fps;
+    let near = list[0];
+    for (const x of list) if (Array.isArray(x) && Math.abs(x[0] - t) < Math.abs(near[0] - t)) near = x;
+    if (Math.abs(near[0] - t) > 0.6) return null;
+    const b = faceToSeq({ x: near[1], y: near[2], w: near[3], h: near[4] }, media, p.sequence);
+    return { x: (b.x0 + b.x1) / 2 - p.sequence.width / 2, y: (b.y0 + b.y1) / 2 - p.sequence.height / 2 };
+  };
+  const marked = new Set(p.captions.flatMap((c) => c.words.filter((w) => w.style !== "normal" && w.wordId).map((w) => w.wordId as string)));
+  const ops: Op[] = [];
+  for (const sc of p.scenes) {
+    if (sc.skill || (ids?.length && !ids.includes(sc.id))) continue;
+    const words = p.transcript.words.flatMap((w) => { const f = wf.get(w.id); return f && f.start >= sc.start && f.start < sc.end ? [{ start: f.start - sc.start, end: Math.min(f.end, sc.end) - sc.start, emphasis: marked.has(w.id) }] : []; });
+    ops.push({ type: "updateScene", id: sc.id, changes: { camera: cameraFromContent({ duration: sc.end - sc.start, fps, words, faceAt: (f) => faceCenter(sc.start + f) }) } });
+  }
+  return ops.length ? { type: "batch", label: "Kamera sesuai isi video", ops } : "Tidak ada scene yang bisa diatur (scene skill memakai kameranya sendiri)";
+}
+
+/** Periksa penempatan aset sebelum dipasang/diubah: harus sudah melihat video di rentangnya, tidak menutupi wajah, tetap di area aman.
+ *  Mengembalikan alasan penolakan, atau catatan (boleh kosong) yang ditempel ke hasil. */
+async function checkPlacement(s: Session, a: Pick<AssetInstance, "defId" | "start" | "duration" | "transform">, coverFace: boolean): Promise<{ reject?: string; note: string }> {
+  const p = s.history.project, fps = p.sequence.fps;
+  const def = BUILTIN_ASSETS.find((d) => d.id === a.defId);
+  const w = typeof def?.layout.w === "number" ? def.layout.w : p.sequence.width, h = typeof def?.layout.h === "number" ? def.layout.h : p.sequence.height;
+  const seen = [...(viewed.get(s) ?? new Map()).entries()].filter(([f, at]) => Date.now() - at < LOOK_FRESH_MS && f >= a.start - fps && f <= a.start + a.duration).map(([f]) => f);
+  if (!seen.length) {
+    const look = Math.min(p.sequence.durationFrames - 1, a.start + Math.round(fps / 2));
+    return { reject: `Ditolak: lihat dulu videonya di rentang elemen ini dengan cz_get_frame (mis. frame ${look}), lalu tentukan ukuran, posisi, warna, dan tema yang cocok: wajah tidak boleh tertutup, elemen di area aman (atas 220, bawah 400, sisi 80 px @1080×1920).`, note: "" };
+  }
+  const box = assetBox(a.transform, w, h);
+  const face = await faceAt(s, a.start + Math.min(a.duration - 1, fps));
+  const r = placementIssues(box, p.sequence, face);
+  const where = `Kotak elemen: x ${Math.round(box.x0)}-${Math.round(box.x1)}, y ${Math.round(box.y0)}-${Math.round(box.y1)}.`;
+  if (r.faceCover > 0.15 && !coverFace) {
+    const up = placementY("atas", h, a.transform.scale, p.sequence.height), down = placementY("bawah", h, a.transform.scale, p.sequence.height);
+    return { reject: `Ditolak: elemen ${r.issues.find((x) => x.includes("wajah"))}. ${where} Geser (mis. y ${up} di atas atau y ${down} di bawah), perkecil transform.scale, atau jadikan layar penuh/B-roll. Bila memang sengaja menutupi wajah, kirim tutupWajah: true.`, note: "" };
+  }
+  const faceNote = face ? `Wajah: x ${Math.round(face.x0)}-${Math.round(face.x1)}, y ${Math.round(face.y0)}-${Math.round(face.y1)}.` : "Data wajah belum ada: pastikan dari frame yang kamu lihat bahwa elemen tidak menutupi wajah.";
+  const warn = r.issues.filter((x) => !x.includes("wajah"));
+  return { note: ` ${where} ${r.full ? "Layar penuh." : faceNote}${warn.length ? ` Perhatian: ${warn.join("; ")}. Perbaiki dengan cz_update_asset.` : ""}` };
+}
 
 /** Ringkas supaya hemat token: hanya yang dibutuhkan untuk mengambil keputusan editing. */
 function projectSummary(p: Project) {
@@ -71,9 +153,31 @@ export const TOOLS: Tool[] = [
     inputSchema: obj({ frame: I }, ["frame"]),
     run: async (s, a) => {
       const f = Math.max(0, Math.round(Number(a.frame)));
+      if (!viewed.has(s)) viewed.set(s, new Map());
+      viewed.get(s)!.set(f, Date.now());
       s.claude.log("frame", `Claude melihat gambar di detik ${(f / s.history.project.sequence.fps).toFixed(1)}`);
       const out = await stillFrame(s.folder, s.history.project, await s.library(), f, join(s.folder, "cache", "claude-frame.jpg"));
       return [{ type: "image", data: (await readFile(out)).toString("base64"), mimeType: "image/jpeg" }];
+    },
+  },
+  {
+    name: "cz_get_media_frames", description: "Lihat isi video proyek mana pun (footage utama atau klip B-roll yang diimpor, termasuk yang belum ada di timeline) pada detik sumber tertentu, untuk memilih potongan B-roll yang cocok dengan ucapan. times: maksimal 6 detik sumber. Pakai seperlunya; tercatat di log user.",
+    inputSchema: obj({ mediaId: S, times: arr(N) }, ["mediaId", "times"]),
+    run: async (s, a) => {
+      const m = s.history.project.media.find((x) => x.id === a.mediaId);
+      if (!m) return `Ditolak: media ${String(a.mediaId)} tidak ada. Lihat cz_list_assets (media).`;
+      const times = (Array.isArray(a.times) ? a.times.map(Number) : []).filter((t) => Number.isFinite(t) && t >= 0 && t <= m.duration).slice(0, 6);
+      if (!times.length) return `Ditolak: times harus detik 0-${m.duration.toFixed(1)}`;
+      s.claude.log("frame", `Claude melihat ${times.length} gambar dari ${m.name}`);
+      const src = existsSync(derived(s.folder, m).proxy) ? derived(s.folder, m).proxy : mediaFile(s.folder, m);
+      const out: Content[] = [];
+      for (const [i, t] of times.entries()) {
+        const f = join(s.folder, "cache", `claude-media-${i}.jpg`);
+        await mkdir(dirname(f), { recursive: true });
+        await run("ffmpeg", ["-y", "-ss", t.toFixed(2), "-i", src, "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "5", f]);
+        out.push({ type: "text", text: `${m.name} @ ${t.toFixed(1)} dtk` }, { type: "image", data: (await readFile(f)).toString("base64"), mimeType: "image/jpeg" });
+      }
+      return out;
     },
   },
   {
@@ -95,75 +199,89 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: "cz_set_scenes", description: "Ganti seluruh scene plan. Tiap scene: title, beat, summary, reason (alasan batas), start/end (frame), options (≤3, id A/B/C, presetId dari template, tepat satu star:true, why).",
-    inputSchema: obj({ scenes: arr(obj({ title: S, beat: S, summary: S, reason: S, start: I, end: I, options: arr(obj({ id: S, presetId: S, star: B, why: S })) }, ["title", "start", "end"])) }, ["scenes"]),
+    name: "cz_set_scenes", description: `Ganti seluruh scene plan. Tiap scene: title, beat, summary, reason (alasan batas), start/end (frame di batas kata), dan opsional ${SCENE_MOTION}`,
+    inputSchema: obj({ scenes: arr(obj({ title: S, beat: S, summary: S, reason: S, start: I, end: I, camera: O, transition: O }, ["title", "start", "end"])) }, ["scenes"]),
+    run: async (s, a) => s.claudeOp({ type: "setScenes", scenes: a.scenes as never }),
+  },
+  {
+    name: "cz_update_scene", description: `Ubah satu scene: changes = {title, beat, summary, reason, start, end, status, camera, transition}. ${SCENE_MOTION}`,
+    inputSchema: obj({ id: S, changes: O }, ["id", "changes"]),
     run: async (s, a) => {
-      const lib = await s.library();
-      const known = new Set(lib?.template?.stylePresets.map((p) => p.id) ?? []);
-      const bad = (a.scenes as { options?: { presetId: string }[] }[]).flatMap((x) => x.options ?? []).filter((o) => known.size && !known.has(o.presetId));
-      if (bad.length) return `Ditolak: presetId tidak ada di template: ${[...new Set(bad.map((o) => o.presetId))].join(", ")}. Pilihan: ${[...known].join(", ")}`;
-      return s.claudeOp({ type: "setScenes", scenes: a.scenes as never });
+      if (!a.changes || !Object.keys(a.changes as object).length) return "Tidak ada perubahan";
+      return s.claudeOp({ type: "updateScene", id: String(a.id), changes: a.changes as never });
     },
   },
   {
-    name: "cz_update_scene", description: "Ubah satu scene (title, beat, summary, reason, start, end, options, custom, status). choose: id opsi untuk dipilih — aset preset gaya dipasang di scene itu.",
-    inputSchema: obj({ id: S, changes: O, choose: S }, ["id"]),
+    name: "cz_auto_camera", description: "Atur kamera scene (tanpa skill) mengikuti isi ucapan: tiap gerak masuk, tahan, lalu keluar ke bingkai awal, condong ke posisi wajah saat itu (mesin wajah CZ mendeteksinya otomatis), dan jatuh di kata yang ditekankan. ids kosong = semua scene. Boleh dipanggil sebelum menyetel kamera sendiri.",
+    inputSchema: obj({ ids: arr(S) }),
     run: async (s, a) => {
-      const p = s.history.project;
-      const ops: Op[] = [];
-      if (a.changes && Object.keys(a.changes as object).length) ops.push({ type: "updateScene", id: String(a.id), changes: a.changes as never });
-      if (a.choose) {
-        const sc = p.scenes.find((x) => x.id === a.id);
-        const opt = sc?.options.find((o) => o.id === a.choose);
-        if (!sc || !opt) return "Ditolak: scene atau opsi tidak ada";
-        ops.push(...await s.chooseOps(sc.id, opt.id));
-      }
-      if (!ops.length) return "Tidak ada perubahan";
-      return s.claudeOp(ops.length === 1 ? ops[0] : { type: "batch", label: `Claude: scene ${String(a.id)}`, ops });
+      const r = await autoCameraOp(s, Array.isArray(a.ids) ? a.ids.map(String) : undefined);
+      return typeof r === "string" ? r : s.claudeOp(r);
     },
   },
   {
-    name: "cz_list_assets", description: "Pustaka aset template skill proyek (id, kategori, parameter, pemicu) dan preset gaya.",
+    name: "cz_list_assets", description: "Aset bergerak yang bisa dipasang (semuanya kode, digerakkan mesin cz-motion): bawaan CZ (judul kinetik, mockup chat yang diketik, kartu poin, B-roll, angka naik, notifikasi) beserta isi yang bisa diubah, dan komposisi \"Aset…\" milik skill proyek.",
     inputSchema: obj({}),
     run: async (s) => {
       const lib = await s.library();
-      if (!lib) return "Proyek belum memakai skill. Aset bebas tetap bisa dibuat dengan defId null.";
+      const skillIds = lib?.component ? (await skillCompositionIds(versionDir(lib.id, lib.version))).filter((id) => SKILL_ASSET.test(id)) : [];
       return json({
-        presets: lib.template?.stylePresets.map((p) => ({ id: p.id, name: p.name, description: p.description, assets: p.assets?.map((x) => x.defId) })),
-        assets: lib.assets.map((d) => ({ id: d.id, name: d.name, category: d.category, params: d.params, trigger: d.trigger, duration: d.duration })),
-        rules: lib.template?.rules,
+        bawaan: BUILTIN_ASSETS.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, durationSec: d.duration, params: d.params })),
+        skill: skillIds.map((id) => ({ id: skillAssetId(id), komposisi: id, params: "props komposisi ini (lihat defaultProps-nya di kode skill)" })),
+        // diTimeline=false: klip yang diimpor tapi belum dipakai = calon B-roll (lihat isinya dengan cz_get_media_frames).
+        media: s.history.project.media.map((m) => ({ id: m.id, name: m.name, duration: m.duration, diTimeline: s.history.project.clips.some((c) => c.mediaId === m.id) })),
       });
     },
   },
   {
-    name: "cz_add_asset", description: "Pasang aset dari pustaka di timeline. start/duration dalam frame; anchorWordId mengikat aset ke kata (ikut bergeser bila dipotong). transform {x,y,scale,rotation,opacity} di koordinat sequence.",
-    inputSchema: obj({ defId: S, start: I, duration: I, params: O, transform: O, sceneId: S, anchorWordId: S, trackId: S }, ["defId", "start"]),
+    name: "cz_add_asset", description: "Pasang aset bergerak di timeline: defId dari cz_list_assets (cz.* atau skill:Aset…), start (frame, di kata pemicu), duration (frame), params (isi), transform {x, y, scale, rotation, opacity} opsional (koordinat sequence, titik tengah kotak aset), anchorWordId (aset ikut bergeser bila dipotong), sceneId, anim {in, out} (fade|blurRise|blurFade|pop|slideUp|slideDown|slideLeft|slideRight|scaleIn|wipe|null), sfx {in, out} (peran efek suara). B-roll: params.media = id video proyek, params.mulai = detik sumber. Wajib melihat video dulu dengan cz_get_frame di rentang elemen; pemasangan ditolak bila belum, atau bila elemen menutupi wajah (kecuali layar penuh/B-roll atau tutupWajah: true). Hasil memuat kotak elemen dan wajah untuk dicek ulang.",
+    inputSchema: obj({ defId: S, start: I, duration: I, params: O, transform: O, sceneId: S, anchorWordId: S, anim: O, sfx: O, tutupWajah: B }, ["defId", "start"]),
     run: async (s, a) => {
       const p = s.history.project;
-      const lib = await s.library();
-      const def = lib?.assets.find((d) => d.id === a.defId) as AssetDef | undefined;
-      if (!def) return `Ditolak: aset ${String(a.defId)} tidak ada di pustaka. Lihat cz_list_assets.`;
-      const base = instantiate(def, lib!.template?.tokens ?? {}, { start: Number(a.start), fps: p.sequence.fps, seq: p.sequence });
-      const asset = {
+      const id = String(a.defId);
+      let def = BUILTIN_ASSETS.find((d) => d.id === id);
+      if (!def && id.startsWith("skill:")) {
+        const lib = await s.library();
+        const ids = lib?.component ? await skillCompositionIds(versionDir(lib.id, lib.version)) : [];
+        if (!ids.includes(id.slice(6))) return `Ditolak: komposisi ${id.slice(6)} tidak ada di skill. Lihat cz_list_assets.`;
+        def = skillAssetDef(id.slice(6), {}, 3 * p.sequence.fps, p.sequence.fps, p.sequence);
+      }
+      if (!def) return `Ditolak: aset ${id} tidak ada. Lihat cz_list_assets.`;
+      const base = instantiate(def, {}, { start: Number(a.start), fps: p.sequence.fps, seq: p.sequence });
+      const placed = { defId: base.defId ?? null, start: base.start, duration: a.duration ? Number(a.duration) : base.duration!, transform: { ...base.transform!, ...(a.transform as object ?? {}) } };
+      const chk = await checkPlacement(s, placed, a.tutupWajah === true);
+      if (chk.reject) return chk.reject;
+      const res = s.claudeOp({ type: "addAssets", assets: [{
         ...base, ...(a.duration ? { duration: Number(a.duration) } : {}), params: (a.params as Args) ?? {},
         ...(a.transform ? { transform: { ...base.transform!, ...(a.transform as object) } } : {}),
         ...(a.sceneId ? { sceneId: String(a.sceneId) } : {}), ...(a.anchorWordId ? { anchorWordId: String(a.anchorWordId) } : {}),
-        ...(a.trackId ? { trackId: String(a.trackId) } : {}),
-      };
-      return s.claudeOp({ type: "addAssets", assets: [asset] });
+        ...(a.anim ? { anim: { ...base.anim!, ...(a.anim as object) } } : {}), ...(a.sfx ? { sfx: { ...base.sfx!, ...(a.sfx as object) } } : {}),
+      }] });
+      return res.startsWith("Ditolak") ? res : res + chk.note;
     },
   },
   {
-    name: "cz_update_asset", description: "Ubah instans aset: params, transform, start, duration, anim {in,out}, keyframes, sfx, hidden. Aset terkunci user ditolak.",
-    inputSchema: obj({ id: S, changes: O }, ["id", "changes"]),
-    run: async (s, a) => s.claudeOp({ type: "updateAsset", id: String(a.id), changes: a.changes as never }),
+    name: "cz_update_asset", description: "Ubah instans aset: params (isi), transform, start, duration, anim {in, out}, keyframes [{frame, x,y,scale,rotation,opacity, ease}], sfx, hidden. Aset terkunci user ditolak.",
+    inputSchema: obj({ id: S, changes: O, tutupWajah: B }, ["id", "changes"]),
+    run: async (s, a) => {
+      const cur = s.history.project.assets.find((x) => x.id === a.id);
+      const ch = (a.changes ?? {}) as Partial<AssetInstance>;
+      // perubahan letak/ukuran/waktu diperiksa ulang seperti saat memasang
+      if (cur && (ch.transform || ch.start !== undefined || ch.duration !== undefined)) {
+        const chk = await checkPlacement(s, { defId: cur.defId, start: ch.start ?? cur.start, duration: ch.duration ?? cur.duration, transform: { ...cur.transform, ...ch.transform } }, a.tutupWajah === true);
+        if (chk.reject) return chk.reject;
+        const res = s.claudeOp({ type: "updateAsset", id: String(a.id), changes: a.changes as never });
+        return res.startsWith("Ditolak") ? res : res + chk.note;
+      }
+      return s.claudeOp({ type: "updateAsset", id: String(a.id), changes: a.changes as never });
+    },
   },
   {
     name: "cz_remove_asset", description: "Hapus instans aset.", inputSchema: obj({ ids: arr(S) }, ["ids"]),
     run: async (s, a) => s.claudeOp({ type: "removeAssets", ids: a.ids as string[] }),
   },
   {
-    name: "cz_set_caption", description: "Caption. action=generate (dari transkrip, maxWords per blok), update (id, changes: style/position/words/start/end), split (id, index kata), merge (id dengan blok berikutnya).",
+    name: "cz_set_caption", description: "Caption. action=generate (dari transkrip, maxWords per blok), update (id, changes: style/position/words/start/end; style.layout = kata|dua-tingkat|subtitle-italic|satu-kata|poster, style.keyAccent = serif|tebal|elips|pil|glow|titik|scramble|tanpa untuk kata kunci blok = kata pertama bergaya, selain itu kata terpanjang), split (id, index kata), merge (id dengan blok berikutnya).",
     inputSchema: obj({ action: { type: "string", enum: ["generate", "update", "split", "merge"] }, id: S, changes: O, index: I, maxWords: I }, ["action"]),
     run: async (s, a) => {
       const p = s.history.project;
@@ -171,26 +289,6 @@ export const TOOLS: Tool[] = [
       if (a.action === "update") return s.claudeOp({ type: "updateCaption", id: String(a.id), changes: a.changes as never });
       if (a.action === "split") return s.claudeOp({ type: "splitCaption", id: String(a.id), index: Number(a.index) });
       return s.claudeOp({ type: "mergeCaption", id: String(a.id) });
-    },
-  },
-  {
-    name: "cz_save_template", description: "Simpan template hasil membaca skill: {id, name, version, tokens, textStyles, caption, stylePresets[{id,name,description,caption,camera{from,to},assets[{defId,at:'awal'|'tengah'|'akhir'|detik,duration,params}]}], controls[{id,group,label,type:select|slider|toggle,options,min,max,default}], sfx{peran: path relatif di folder skill}, rules{auto[],scenes,notes[],forbid[]}, warnings[]}. Hanya saat tugas generate/ubah skill.",
-    inputSchema: obj({ template: O }, ["template"]),
-    run: async (s, a) => {
-      const sk = s.claude.running?.skill;
-      if (!sk) return "Ditolak: tidak sedang generate skill.";
-      const errs = await saveTemplate(sk.id, sk.version, a.template);
-      return errs.length ? `Tidak tersimpan: ${errs.join("; ")}` : `Template tersimpan di ${sk.id} v${sk.version}.`;
-    },
-  },
-  {
-    name: "cz_save_asset_def", description: "Simpan satu definisi aset JSON deklaratif: {id, name, category, version, description, params{nama:{type:text|list|color|number|bool|select|image|icon, default, min, max, options}}, layout{anchor,x,y,w,h,safeArea}, tree[elemen rect|text|image|video|icon|shape|stack|list|mask|ui-chat], in{preset,frames}, out{preset,frames}, sfx{in,out peran}, duration(detik), trigger, source, license}. Properti elemen: lihat prompt tugas (properti tak dikenal ditolak). Nilai '$nama' merujuk parameter lalu token template. Preset animasi: fade, blurRise, blurFade, pop, slideUp, slideDown, slideLeft, slideRight, scaleIn, wipe.",
-    inputSchema: obj({ def: O }, ["def"]),
-    run: async (s, a) => {
-      const sk = s.claude.running?.skill;
-      if (!sk) return "Ditolak: tidak sedang generate skill.";
-      const errs = await saveAssetDef(sk.id, sk.version, a.def);
-      return errs.length ? `Tidak tersimpan: ${errs.join("; ")}` : `Aset ${(a.def as AssetDef).id} tersimpan.`;
     },
   },
   {
@@ -221,9 +319,62 @@ export const TOOLS: Tool[] = [
     },
   },
   {
-    name: "cz_set_status", description: "Laporkan kemajuan tugas panjang ke user (tampil di panel Claude).",
+    name: "cz_set_scene_skill",
+    description: "Gambar satu scene dengan komposisi Remotion milik skill (mis. CleanScene). component = id <Composition> skill; props = props komponen itu persis seperti tipe di kode skill (style, keyword, text, transIn, transOut, prevLayout, camFrom, chat, illus, sfx, dll). CZ mengisi sendiri: src, a, b, words (dari transkrip), fps, width, height, voiceExternal, seed, sfxLib, faces dan subject (bila skrip analisis sudah dijalankan). Scene yang melewati potongan dirender per potongan. Bila komponen skill mendukung props adjust (lihat tipenya), props.adjust {lapisan: {dx, dy, scale, ox, oy, hidden}} berisi geseran elemen dari user: pertahankan saat mengubah props lain. component null = kembali ke tampilan CZ biasa.",
+    inputSchema: obj({ id: S, component: { type: ["string", "null"] }, props: O }, ["id", "component"]),
+    run: async (s, a) => {
+      const lib = await s.library();
+      if (a.component === null) return s.claudeOp({ type: "updateScene", id: String(a.id), changes: { skill: null } });
+      if (!lib?.component) return `Ditolak: skill proyek ini belum punya komposisi Remotion yang terkompilasi.${lib?.warnings.length ? ` Peringatan: ${lib.warnings.join("; ")}` : ""}`;
+      const ids = await skillCompositionIds(versionDir(lib.id, lib.version));
+      if (ids.length && !ids.includes(String(a.component))) return `Ditolak: komposisi ${String(a.component)} tidak ada. Pilihan: ${ids.join(", ")}`;
+      return s.claudeOp({ type: "updateScene", id: String(a.id), changes: { skill: { component: String(a.component), props: (a.props ?? {}) as Record<string, unknown> } } });
+    },
+  },
+  {
+    name: "cz_run_skill_script",
+    description: "Jalankan skrip Python milik skill (path relatif folder skill, mis. scripts/ce_analyze.py) dengan Python user. Argumen boleh memakai {media:ID} (file video asli), {proxy:ID}, {data:ID} (folder hasil analisis media itu; faces.json dan subject.webm di sini otomatis dipakai komposisi skill), {work} (folder kerja proyek, juga cwd), {skill} (folder skill), {models} (model yunet.onnx dan u2net_human_seg.onnx dari cz install). Contoh analisis wajah + matte: script scripts/ce_analyze.py, args [\"{media:m1}\", \"{data:m1}\", \"--matte\", \"--models\", \"{models}\"]. Bisa lama (menit); keluaran 8000 karakter terakhir dikembalikan. Hasil berkas dibaca dengan Read.",
+    inputSchema: obj({ script: S, args: arr(S) }, ["script"]),
+    run: async (s, a) => {
+      const lib = await s.library();
+      if (!lib) return "Ditolak: proyek belum memakai skill";
+      const args = Array.isArray(a.args) ? a.args.map(String).slice(0, 60) : [];
+      s.claude.log("info", `Menjalankan skrip skill ${String(a.script)}`);
+      const r = await runSkillScript({ folder: s.folder, project: s.history.project, skill: lib, script: String(a.script), args,
+        onLine: (l) => { s.claudeNote = { text: l, at: Date.now() }; } });
+      s.reloadLibrary();
+      const data = s.history.project.media.map((m) => `${m.id}: ${skillDataDir(s.folder, m.id)}`).join("\n");
+      return `${r.code === 0 ? "Selesai" : `Gagal (kode ${r.code})`}. Folder kerja: ${r.work}\nFolder data media:\n${data}\n--- keluaran ---\n${r.output}`;
+    },
+  },
+  {
+    name: "cz_write_skill_file",
+    description: "Hanya saat tugas menulis komposisi skill: tulis satu file kode di versi skill baru (path relatif folder skill, harus di remotion/, mis. remotion/src/index.ts, remotion/src/Scene.tsx, remotion/cz-styles.json). Menimpa file yang ada. Setelah selesai menulis, panggil cz_build_skill_component.",
+    inputSchema: obj({ path: S, content: S }, ["path", "content"]),
+    run: async (s, a) => {
+      if (!s.codeTarget) return "Ditolak: tidak ada tugas penulisan komposisi skill yang berjalan";
+      const rel = await writeSkillFile(s.codeTarget, String(a.path), String(a.content));
+      return `Tersimpan: ${rel}`;
+    },
+  },
+  {
+    name: "cz_build_skill_component",
+    description: "Kompilasi komposisi skill yang sedang ditulis (esbuild). Mengembalikan galat dengan file:baris bila gagal; perbaiki lalu panggil lagi sampai berhasil.",
+    inputSchema: obj({}),
+    run: async (s) => {
+      if (!s.codeTarget) return "Ditolak: tidak ada tugas penulisan komposisi skill yang berjalan";
+      const r = await buildReport(s.codeTarget);
+      s.reloadLibrary();
+      return r.text;
+    },
+  },
+  {
+    name: "cz_set_status", description: "Laporkan kemajuan tugas panjang ke user (tampil di panel Claude dan bilah kemajuan). progress: 0..1 dari seluruh tugas.",
     inputSchema: obj({ text: S, progress: N }, ["text"]),
-    run: async (s, a) => { s.claude.log("info", `${String(a.text)}${a.progress !== undefined ? ` (${Math.round(Number(a.progress) * 100)}%)` : ""}`); return "ok"; },
+    run: async (s, a) => {
+      const pr = Number(a.progress);
+      s.claudeNote = { text: String(a.text), progress: a.progress === undefined || !Number.isFinite(pr) ? undefined : Math.max(0, Math.min(1, pr)), at: Date.now() };
+      s.claude.log("info", `${String(a.text)}${a.progress !== undefined ? ` (${Math.round(Number(a.progress) * 100)}%)` : ""}`); return "ok"; },
   },
 ];
 

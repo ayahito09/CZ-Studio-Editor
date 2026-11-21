@@ -5,3 +5,8 @@ export * from "./history.ts";
 export * from "./skill.ts";
 export * from "./analysis.ts";
 export { anchorSnapshot } from "./content.ts";
+export * from "./skillScene.ts";
+export * from "./skillControls.ts";
+export * from "./camera.ts";
+export * from "./safeEdges.ts";
+export * from "./builtinAssets.ts";

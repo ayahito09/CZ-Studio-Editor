@@ -4,6 +4,9 @@ import { api, noteImageUrl, uploadNoteImage } from "./api.ts";
 import { useClaudeAction } from "./ClaudePanel.tsx";
 import { useEd } from "./ed.ts";
 import { Icon } from "./icons.tsx";
+import { Section } from "./Section.tsx";
+import { SkillControlsTab } from "./SkillControlsTab.tsx";
+import { SkillSceneTab } from "./SkillSceneTab.tsx";
 import { timecode, useStore } from "./store.ts";
 
 const STATUS: { id: SceneStatus; label: string }[] = [
@@ -71,15 +74,16 @@ export function SceneList() {
   );
 }
 
-type Tab = "gaya" | "kustom" | "teks" | "sfx" | "catatan" | "riwayat";
+// Tiga kelompok fungsi: tampilan bagian (gaya, atur, kamera), isinya (teks, efek suara), dan catatan revisi (+ riwayat).
+type Tab = "tampilan" | "isi" | "catatan";
 const TABS: { id: Tab; label: string }[] = [
-  { id: "gaya", label: "Gaya" }, { id: "kustom", label: "Atur" }, { id: "teks", label: "Teks" }, { id: "sfx", label: "Efek suara" }, { id: "catatan", label: "Catatan" }, { id: "riwayat", label: "Riwayat" },
+  { id: "tampilan", label: "Tampilan" }, { id: "isi", label: "Teks & suara" }, { id: "catatan", label: "Catatan" },
 ];
 
 export function PlanPanel() {
   const ed = useEd();
   const s = useScene();
-  const [tab, setTab] = useState<Tab>("gaya");
+  const [tab, setTab] = useState<Tab>("tampilan");
   if (!s) return <aside className="panel inspector"><h2 className="panel__title">Rencana</h2><p className="muted">Belum ada bagian. Buat rencana dengan Claude, atau tekan Bagi untuk membaginya sendiri.</p></aside>;
   const locked = s.status === "dikunci";
   const set = (changes: Partial<Scene>) => ed.op({ type: "updateScene", id: s.id, changes });
@@ -103,13 +107,19 @@ export function PlanPanel() {
           </button>
         ))}
       </div>
-      {locked && tab !== "catatan" && tab !== "riwayat" && <p className="hint">Bagian ini dikunci: Claude tidak akan mengubahnya. Ganti statusnya untuk membuka.</p>}
-      {tab === "gaya" && <StyleTab s={s} />}
-      {tab === "kustom" && <CustomTab s={s} />}
-      {tab === "teks" && <TextTab s={s} />}
-      {tab === "sfx" && <SfxTab s={s} />}
-      {tab === "catatan" && <NotesTab s={s} notes={notes} />}
-      {tab === "riwayat" && <HistoryTab />}
+      {locked && tab !== "catatan" && <p className="hint">Dikunci. Ubah status untuk membuka.</p>}
+      {tab === "tampilan" && <>
+        <Section title="Gaya">{s.skill ? <SkillSceneTab s={s} /> : <StyleTab s={s} />}</Section>
+        <Section title={s.skill ? "Atur" : "Atur & kamera"}>{s.skill ? <SkillControlsTab s={s} /> : <CustomTab s={s} />}</Section>
+      </>}
+      {tab === "isi" && <>
+        <Section title="Teks">{<TextTab s={s} />}</Section>
+        <Section title="Efek suara">{<SfxTab s={s} />}</Section>
+      </>}
+      {tab === "catatan" && <>
+        <Section title="Catatan" count={notes.filter((n) => n.status !== "selesai").length}><NotesTab s={s} notes={notes} /></Section>
+        <Section title="Riwayat" open={false}><HistoryTab /></Section>
+      </>}
     </aside>
   );
 }
@@ -127,6 +137,23 @@ function StyleTab({ s }: { s: Scene }) {
     ed.op({ type: "updateScene", id: s.id, changes: { options: [...s.options, { id, presetId, star: s.options.length === 0 }] } });
   };
   const unused = presets.filter((p) => !s.options.some((o) => o.presetId === p.id));
+  /** Tampilan yang sama di semua bagian lain yang tidak dikunci: pakai opsi yang sudah ada, atau tambahkan dulu. */
+  const applyAll = (presetId: string) => {
+    if (!confirm("Pakai tampilan ini di semua bagian yang tidak dikunci? Elemen tiap bagian ikut diganti (bisa dibatalkan dengan Ctrl+Z).")) return;
+    ed.run(async () => {
+      let st = await api.state();
+      for (const x of ed.project.scenes) {
+        if (x.id === s.id || x.status === "dikunci") continue;
+        let opt = x.options.find((o) => o.presetId === presetId);
+        if (!opt) {
+          opt = { id: String.fromCharCode(65 + x.options.length), presetId, star: false };
+          await ed.op({ type: "updateScene", id: x.id, changes: { options: [...x.options, opt] } });
+        }
+        st = await api.choose(x.id, opt.id);
+      }
+      return st;
+    });
+  };
   return (
     <div className="stack">
       {s.options.length === 0 && <p className="muted">Belum ada pilihan tampilan. Buat rencana dengan Claude, atau tambahkan di bawah.</p>}
@@ -139,6 +166,7 @@ function StyleTab({ s }: { s: Scene }) {
               <strong>{o.id}. {pr?.name ?? o.presetId}{o.star ? " ★" : ""}</strong>
               <button className={"btn btn--sm-text" + (on ? " is-on" : "")} disabled={s.status === "dikunci"} onClick={() => choose(o.id)}>{on ? "Dipakai · pasang lagi" : "Pakai"}</button>
             </div>
+            {pr && <button className="btn btn--sm-text style-row__all" onClick={() => applyAll(o.presetId)} title="Pakai tampilan ini di semua bagian yang tidak dikunci">Terapkan ke semua</button>}
             {pr?.description && <p className="hint">{pr.description}</p>}
             {o.why && <p className="option__why">{o.why}</p>}
             {!pr && <p className="hint">Tampilan ini tidak ada di gaya edit yang dipakai.</p>}
@@ -155,15 +183,33 @@ function StyleTab({ s }: { s: Scene }) {
   );
 }
 
+/** Kamera sesuai isi ucapan: tiap gerak masuk, tahan, lalu keluar ke bingkai awal. */
+function CameraBlock({ s }: { s: Scene }) {
+  const ed = useEd();
+  const locked = s.status === "dikunci";
+  const moves = s.camera?.moves ?? [];
+  return (
+    <div className="group">
+      <span className="group__label">Kamera</span>
+      <p className="hint">{moves.length ? `${moves.length} gerak · masuk, tahan, keluar` : "Belum ada gerak kamera."}</p>
+      <div className="row">
+        <button type="button" className="btn btn--sm-text" disabled={locked} onClick={() => ed.run(() => api.autoCamera([s.id]))} title="Gerak di kata penting, condong ke wajah">Atur otomatis</button>
+        <button type="button" className="btn btn--sm-text" onClick={() => ed.run(() => api.autoCamera())}>Semua bagian</button>
+      </div>
+    </div>
+  );
+}
+
 function CustomTab({ s }: { s: Scene }) {
   const ed = useEd();
   const controls = ed.lib?.template?.controls ?? [];
-  if (!controls.length) return <p className="muted">Gaya edit ini tidak punya pengaturan tambahan.</p>;
+  if (!controls.length) return <div className="stack"><CameraBlock s={s} /><p className="muted">Gaya edit ini tidak punya pengaturan tambahan.</p></div>;
   const val = (id: string, d: unknown) => (id in s.custom ? s.custom[id] : d);
   const set = (id: string, v: unknown) => ed.op({ type: "updateScene", id: s.id, changes: { custom: { ...s.custom, [id]: v } } });
   const groups = [...new Set(controls.map((c) => c.group ?? ""))];
   return (
     <div className="stack">
+      <CameraBlock s={s} />
       {groups.map((g) => (
         <div key={g} className="group">
           {g && <span className="group__label">{g}</span>}
@@ -196,7 +242,13 @@ function TextTab({ s }: { s: Scene }) {
     <div className="stack">
       <p className="transcript">{words.length ? words.map((w) => <span key={w.id} className="word" onClick={() => ed.seek(frames.get(w.id)!.start)}>{w.text} </span>) : <span className="muted">Tidak ada ucapan di bagian ini.</span>}</p>
       <p className="hint">{caps.length} subtitle di bagian ini. Ubah teks dan tampilannya di tahap Sunting (klik dua kali di pratinjau).</p>
-      {caps.length > 0 && <button className="btn btn--sm-text" onClick={() => { ed.select([caps[0].id]); ed.setMode("edit"); }}>Buka subtitle pertama</button>}
+      {caps.length > 0 && (
+        <div className="elem-acts">
+          <button className="btn btn--sm-text" onClick={() => { ed.select([caps[0].id]); ed.setMode("edit"); }}>Buka subtitle</button>
+          <button className="btn btn--sm-text" disabled={ed.project.captions.length < 2} title="Samakan gaya dan posisi semua subtitle dengan subtitle pertama di bagian ini"
+            onClick={() => ed.op({ type: "batch", label: "Samakan gaya semua subtitle", ops: ed.project.captions.filter((x) => x.id !== caps[0].id).map((x) => ({ type: "updateCaption" as const, id: x.id, changes: { style: { ...caps[0].style }, position: { ...caps[0].position } } })) })}>Gaya ke semua</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -209,7 +261,7 @@ function SfxTab({ s }: { s: Scene }) {
   return (
     <ul className="plain stack">
       {assets.map((a) => {
-        const name = ed.lib?.assets.find((d) => d.id === a.defId)?.name ?? "Teks bebas";
+        const name = ed.assetDefs.find((d) => d.id === a.defId)?.name ?? "Teks bebas";
         return (
           <li key={a.id} className="row row--between">
             <button className="link-btn" onClick={() => { ed.select([a.id]); ed.seek(a.start); }}>{name}</button>
@@ -220,6 +272,10 @@ function SfxTab({ s }: { s: Scene }) {
           </li>
         );
       })}
+      {assets.length > 0 && (
+        <li><button className="btn btn--sm-text" disabled={!roles.length || s.status === "dikunci"} title="Pakai efek suara elemen pertama di bagian ini untuk semua elemen di proyek"
+          onClick={() => ed.op({ type: "batch", label: "Samakan efek suara", ops: ed.project.assets.filter((x) => !x.locked).map((x) => ({ type: "updateAsset" as const, id: x.id, changes: { sfx: { in: assets[0].sfx.in ?? null } } })) })}>Efek suara ke semua elemen</button></li>
+      )}
     </ul>
   );
 }

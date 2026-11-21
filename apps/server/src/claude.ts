@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { config, getSettings } from "./config.ts";
 
 export type ClaudeState = "terhubung" | "belum-login" | "tidak-terpasang" | "memeriksa";
-export interface ClaudeStatus { state: ClaudeState; version?: string; path?: string; detail?: string; checkedAt: number }
+export interface ClaudeStatus { state: ClaudeState; email?: string; plan?: string; version?: string; path?: string; detail?: string; checkedAt: number }
 
 let status: ClaudeStatus = { state: "memeriksa", checkedAt: 0 };
 let checking: Promise<ClaudeStatus> | null = null;
@@ -56,12 +56,22 @@ export function openLogin(): boolean {
   return true;
 }
 
+/** `claude auth logout`: keluar dari akun Claude Code. Login ini dipakai bersama Claude Code di komputer ini, bukan hanya CZ. */
+export async function logoutClaude(): Promise<boolean> {
+  const bin = findClaude();
+  if (!bin) return false;
+  const r = await collect(spawnClaude(bin, ["auth", "logout"]), null, 20_000);
+  return r.code === 0;
+}
+
 const quote = (a: string) => (/^[\w./:=\\-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`);
 function spawnClaude(bin: string, args: string[], cwd?: string): ChildProcess {
   const viaShell = process.platform === "win32" && /\.(cmd|bat)$/i.test(bin);
+  // Skrip skill lewat MCP bisa berjalan puluhan menit (analisis wajah + matte).
+  const env = { ...process.env, MCP_TOOL_TIMEOUT: process.env.MCP_TOOL_TIMEOUT ?? String(60 * 60_000) };
   return viaShell
-    ? spawn([quote(bin), ...args.map(quote)].join(" "), { cwd, shell: true, windowsHide: true })
-    : spawn(bin, args, { cwd, windowsHide: true });
+    ? spawn([quote(bin), ...args.map(quote)].join(" "), { cwd, shell: true, windowsHide: true, env })
+    : spawn(bin, args, { cwd, windowsHide: true, env });
 }
 
 function collect(child: ChildProcess, input: string | null, timeoutMs: number): Promise<{ code: number | null; out: string; err: string }> {
@@ -95,8 +105,8 @@ export function checkClaude(force = false): Promise<ClaudeStatus> {
     // Cara utama: `claude auth status` (cepat, tanpa memakai kuota). Versi lama tanpa perintah itu: panggilan uji singkat.
     const a = await collect(spawnClaude(bin, ["auth", "status"]), null, 20_000);
     try {
-      const st = JSON.parse(a.out.slice(a.out.indexOf("{"))) as { loggedIn?: boolean };
-      if (typeof st.loggedIn === "boolean") return (status = { state: st.loggedIn ? "terhubung" : "belum-login", version, path: bin, checkedAt: Date.now() });
+      const st = JSON.parse(a.out.slice(a.out.indexOf("{"))) as { loggedIn?: boolean; email?: string; subscriptionType?: string };
+      if (typeof st.loggedIn === "boolean") return (status = { state: st.loggedIn ? "terhubung" : "belum-login", email: st.loggedIn ? st.email : undefined, plan: st.loggedIn ? st.subscriptionType : undefined, version, path: bin, checkedAt: Date.now() });
     } catch { /* bukan JSON: pakai panggilan uji */ }
     const t = await collect(spawnClaude(bin, ["-p", "--output-format", "json"]), "Balas satu kata: ok", 90_000);
     let res: { is_error?: boolean; result?: string } = {};
@@ -117,13 +127,13 @@ export interface Task {
   id: string; label: string; prompt: string;
   state: "antre" | "berjalan" | "selesai" | "gagal" | "dihentikan";
   log: LogEntry[]; startedAt?: number; endedAt?: number; costUsd?: number;
-  /** Skill yang sedang di-generate/diubah: alat cz_save_* menulis ke sini. */
+  /** Skill yang sedang ditulis/diubah kodenya. */
   skill?: { id: string; version: number; dir: string };
   addDirs: string[];
 }
 
 const SYSTEM = `Kamu bekerja di dalam CZ Studio, editor video lokal milik user.
-- Ubah proyek HANYA lewat alat mcp__cz__* (cz_get_project, cz_set_scenes, cz_add_asset, ...). Jangan menyunting project.cz.json atau file media.
+- Ubah proyek HANYA lewat alat mcp__cz__* (cz_get_project, cz_set_scenes, cz_set_scene_skill, ...). Jangan menyunting project.cz.json atau file media.
 - Waktu sequence dalam frame (bilangan bulat); waktu sumber dalam detik. Baca fps dari cz_get_project.
 - Footage asli tidak diubah dan tidak ada color grading kecuali diminta.
 - Audio dan video tidak dikirim kepadamu; lihat frame hanya bila perlu lewat cz_get_frame.
@@ -182,6 +192,7 @@ export class ClaudeBridge {
       // Satu baris: claude.cmd (instalasi npm) dijalankan lewat cmd.exe, yang memutus perintah di baris baru.
       "--append-system-prompt", SYSTEM.replace(/\s*\n\s*/g, " "),
       ...(getSettings().claudeModel ? ["--model", getSettings().claudeModel] : []),
+      ...(getSettings().claudeEffort ? ["--effort", getSettings().claudeEffort] : []),
       ...t.addDirs.filter((d) => existsSync(d)).flatMap((d) => ["--add-dir", d]),
       ...(this.sessionId ? ["--resume", this.sessionId] : []),
     ];

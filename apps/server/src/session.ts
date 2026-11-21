@@ -4,15 +4,25 @@ import {
   applyOp, buildCaptions, checkCuts, createProject, DEFAULT_SILENCE, describeOp, detectSilences, expandPreset, History, newId, srcToSeq, suggestFillers, validateOp, validateProject,
   type Media, type Op, type Project, type SilenceOptions, type Source,
 } from "@cz/core";
-import { checkClaude, ClaudeBridge } from "./claude.ts";
-import { buildPrompt } from "./prompts.ts";
+import { ClaudeBridge } from "./claude.ts";
+import { detectFaces, faceEngineReady } from "./faces.ts";
+import { componentPrompt, editComponentPrompt } from "./prompts.ts";
 import { getSettings } from "./config.ts";
-import { loadLibrary, versionDir, type Library } from "./skills.ts";
+import { builtinSfxRoles } from "./builtin.ts";
+import { hasComponent, type CodeTarget } from "./skillCode.ts";
+import { forkVersion, loadLibrary, versionDir, type Library } from "./skills.ts";
 import { ENV_RATE, envelope, mediaFile, MediaJobs, probe } from "./media.ts";
 import { engineStatus, transcribe } from "./transcribe.ts";
 
 export type AutoState = "menunggu" | "berjalan" | "selesai" | "dilewati" | "gagal";
-export interface AutoStep { id: string; label: string; state: AutoState; note?: string }
+export interface AutoStep { id: string; label: string; state: AutoState; note?: string; progress?: number; startedAt?: number; endedAt?: number }
+/** Bagian timeline yang terakhir diubah Claude: UI menaruh kursor Claude di sana. */
+export interface ClaudeFocus { frame: number; end: number; label: string; ids: string[]; at: number }
+
+/** Kemajuan satu media 0..1 lintas tahap (proxy paling lama). */
+export const jobFraction = (j: { stage: string; progress: number } | undefined) =>
+  !j ? 0 : j.stage === "siap" || j.stage === "gagal" ? 1 : j.stage === "proxy" ? j.progress * 0.8
+    : j.stage === "thumbnail" ? 0.8 + j.progress * 0.05 : j.stage === "waveform" ? 0.85 + j.progress * 0.15 : 0;
 
 export interface TxStatus { stage: "menunggu" | "transkrip" | "siap" | "gagal"; progress: number; error?: string }
 
@@ -30,6 +40,9 @@ export class Session {
   claude: ClaudeBridge;
   /** Perubahan Claude yang menunggu persetujuan (mode tinjau). */
   pending: { id: string; label: string; op: Op; at: number }[] = [];
+  claudeFocus: ClaudeFocus | null = null;
+  /** Laporan cz_set_status terakhir (teks + kemajuan 0..1 bila Claude menyebutnya). */
+  claudeNote: { text: string; progress?: number; at: number } | null = null;
   private pendingSeq = 0;
   private lib: { key: string; value: Promise<Library | null> } | null = null;
   private txQueue: Promise<void> = Promise.resolve();
@@ -43,6 +56,7 @@ export class Session {
     this.claude = new ClaudeBridge(folder);
     // Transkrip otomatis begitu media siap, bila model lokal sudah dipasang.
     this.jobs.onReady = (m) => {
+      void detectFaces(this.folder, m).catch(() => {}); // mesin wajah CZ: dipakai kamera dan penempatan elemen
       if (!m.hasAudio || this.tx.has(m.id) || this.history.project.transcript.words.some((w) => w.mediaId === m.id)) return;
       void engineStatus().then((e) => { if (e.ready) this.transcribe(m.id); });
     };
@@ -159,6 +173,30 @@ export class Session {
     return this.lib.value;
   }
   reloadLibrary() { this.lib = null; }
+  /** Versi skill yang sedang ditulis komposisinya oleh Claude (cz_write_skill_file / cz_build_skill_component). */
+  codeTarget: CodeTarget | null = null;
+  /** Skill tanpa kode: buat versi baru (skill asli utuh), pindahkan proyek ke versi itu, dan siapkan tugas Claude
+   *  untuk menulis komposisi Remotion-nya. Mengembalikan argumen ClaudeBridge.enqueue. */
+  async prepareComponent(sk: { id: string; version: number }, text = "") {
+    const nv = await forkVersion(sk.id, sk.version);
+    if (this.history.project.skill?.id === sk.id) this.apply({ type: "setSkill", skill: { id: sk.id, version: nv } });
+    this.reloadLibrary();
+    this.codeTarget = { id: sk.id, version: nv };
+    const dir = versionDir(sk.id, nv);
+    const skill = { id: sk.id, version: nv, dir };
+    return ["Tulis mesin gaya edit", componentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
+  }
+  /** Ubah gaya edit = ubah kode komposisinya di versi baru (skill tanpa kode: ditulis dulu dengan permintaan itu). */
+  async prepareEdit(sk: { id: string; version: number }, text: string) {
+    if (!hasComponent(sk.id, sk.version)) return this.prepareComponent(sk, text);
+    const nv = await forkVersion(sk.id, sk.version);
+    if (this.history.project.skill?.id === sk.id) this.apply({ type: "setSkill", skill: { id: sk.id, version: nv } });
+    this.reloadLibrary();
+    this.codeTarget = { id: sk.id, version: nv };
+    const dir = versionDir(sk.id, nv);
+    const skill = { id: sk.id, version: nv, dir };
+    return [`Ubah gaya edit (versi ${nv})`, editComponentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
+  }
 
   review() { return getSettings().reviewClaude; }
   propose(op: Op): string {
@@ -170,8 +208,25 @@ export class Session {
   /** Perubahan dari Claude: langsung (tercatat sumber "claude") atau masuk usulan bila mode tinjau aktif. */
   claudeOp(op: Op): string {
     if (this.review()) return this.propose(op);
+    const before = this.history.project;
     const err = this.apply(op, "claude");
+    if (!err) this.markFocus(before, describeOp(op));
     return err ? `Ditolak: ${err}` : `Berhasil: ${describeOp(op)}.`;
+  }
+  /** Immer menjaga identitas objek yang tidak berubah: yang baru/berubah = yang tidak ada di proyek sebelumnya. */
+  private markFocus(before: Project, label: string) {
+    const p = this.history.project;
+    const old = new Set<object>([...before.assets, ...before.scenes, ...before.captions]);
+    const changed = [
+      ...p.assets.filter((a) => !old.has(a)).map((a) => ({ id: a.id, start: a.start, end: a.start + a.duration })),
+      ...p.scenes.filter((x) => !old.has(x)).map((x) => ({ id: x.id, start: x.start, end: x.end })),
+      ...p.captions.filter((x) => !old.has(x)).map((x) => ({ id: x.id, start: x.start, end: x.end })),
+    ];
+    if (!changed.length) return;
+    this.claudeFocus = {
+      frame: Math.min(...changed.map((c) => c.start)), end: Math.max(...changed.map((c) => c.end)),
+      label, ids: changed.slice(0, 200).map((c) => c.id), at: Date.now(),
+    };
   }
   /** Terima (apply) atau tolak usulan. Usulan yang sudah tidak cocok dengan proyek dilaporkan. */
   settlePending(ids: string[], accept: boolean): string[] {
@@ -205,42 +260,60 @@ export class Session {
     return ops;
   }
 
-  /** Rapikan otomatis setelah proyek dibuat: langkah berurutan, yang tidak bisa jalan dilewati dengan alasan. */
-  auto: { steps: AutoStep[]; running: boolean } | null = null;
+  /** Rapikan otomatis setelah proyek dibuat (tanpa Claude; gaya edit dan penataan dipilih user dari editor): langkah berurutan, yang tidak bisa jalan dilewati dengan alasan. */
+  auto: { steps: AutoStep[]; running: boolean; startedAt: number } | null = null;
 
   async autoEdit() {
     if (this.auto?.running) throw new Error("Rapikan otomatis sedang berjalan");
     const steps: AutoStep[] = [
       { id: "siapkan", label: "Menyiapkan video", state: "menunggu" },
+      { id: "wajah", label: "Mendeteksi wajah", state: "menunggu" },
       { id: "transkrip", label: "Menulis transkrip", state: "menunggu" },
       { id: "jeda", label: "Memotong jeda", state: "menunggu" },
       { id: "subtitle", label: "Membuat subtitle", state: "menunggu" },
-      { id: "gaya", label: "Claude menyiapkan gaya edit", state: "menunggu" },
-      { id: "tata", label: "Claude menata tiap bagian", state: "menunggu" },
     ];
-    this.auto = { steps, running: true };
+    this.auto = { steps, running: true, startedAt: Date.now() };
+    this.claudeNote = null;
+    let cur: AutoStep | null = null;
     const step = async (id: string, fn: () => Promise<string | void>) => {
-      const s = steps.find((x) => x.id === id)!;
-      s.state = "berjalan";
+      const s = (cur = steps.find((x) => x.id === id)!);
+      s.state = "berjalan"; s.startedAt = Date.now(); s.progress = 0;
       try { const skip = await fn(); if (typeof skip === "string") { s.state = "dilewati"; s.note = skip; } else s.state = "selesai"; }
       catch (e) { s.state = "gagal"; s.note = (e as Error).message; }
+      s.progress = 1; s.endedAt = Date.now();
     };
-    const wait = async (done: () => boolean, maxMs = 30 * 60_000) => {
+    // progress: kemajuan langkah yang berjalan (0..1), dibaca tiap putaran tunggu; tidak pernah mundur.
+    const wait = async (done: () => boolean, progress?: () => number | undefined, maxMs = 30 * 60_000) => {
       const t0 = Date.now();
-      while (!done()) { if (Date.now() - t0 > maxMs) throw new Error("terlalu lama"); await new Promise((r) => setTimeout(r, 700)); }
+      while (!done()) {
+        if (Date.now() - t0 > maxMs) throw new Error("terlalu lama");
+        const v = progress?.();
+        if (cur && v !== undefined && Number.isFinite(v)) cur.progress = Math.max(cur.progress ?? 0, Math.min(0.99, v));
+        await new Promise((r) => setTimeout(r, 700));
+      }
     };
+    const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
     const p = () => this.history.project;
     try {
       await step("siapkan", async () => {
         if (!p().media.length) return "Belum ada video";
-        await wait(() => p().media.every((m) => ["siap", "gagal"].includes(this.jobs.status.get(m.id)?.stage ?? "")));
+        await wait(() => p().media.every((m) => ["siap", "gagal"].includes(this.jobs.status.get(m.id)?.stage ?? "")),
+          () => avg(p().media.map((m) => jobFraction(this.jobs.status.get(m.id)))));
+      });
+      await step("wajah", async () => {
+        const vids = p().media.filter((m) => m.width > 0);
+        if (!vids.length) return "Belum ada video";
+        if (!(await faceEngineReady())) return "Mesin wajah belum dipasang (cz install)";
+        let done = 0;
+        await Promise.all(vids.map((m) => detectFaces(this.folder, m).then(() => { done++; if (cur) cur.progress = done / vids.length; })));
       });
       await step("transkrip", async () => {
         const audio = p().media.filter((m) => m.hasAudio);
         if (!audio.length) return "Video tanpa suara";
         if (!(await engineStatus()).ready) return "Alat transkrip belum dipasang (cz models install)";
         for (const m of audio) if (!this.tx.has(m.id) && !p().transcript.words.some((w) => w.mediaId === m.id)) this.transcribe(m.id);
-        await wait(() => audio.every((m) => p().transcript.words.some((w) => w.mediaId === m.id) || ["siap", "gagal"].includes(this.tx.get(m.id)?.stage ?? "")));
+        await wait(() => audio.every((m) => p().transcript.words.some((w) => w.mediaId === m.id) || ["siap", "gagal"].includes(this.tx.get(m.id)?.stage ?? "")),
+          () => avg(audio.map((m) => { const t = this.tx.get(m.id); return !t || t.stage === "siap" || t.stage === "gagal" ? 1 : t.progress; })));
         if (!p().transcript.words.length) return "Tidak ada ucapan yang terbaca";
       });
       await step("jeda", async () => {
@@ -257,29 +330,6 @@ export class Session {
         if (!caps.length) return "Tidak ada ucapan";
         const err = this.apply({ type: "setCaptions", captions: caps });
         if (err) throw new Error(err);
-      });
-      const claudeOk = (await checkClaude()).state === "terhubung";
-      const runClaude = async (label: string, prompt: string, opts: Parameters<ClaudeBridge["enqueue"]>[2]) => {
-        const t = this.claude.enqueue(label, prompt, opts);
-        await wait(() => t.state !== "antre" && t.state !== "berjalan");
-        if (t.state !== "selesai") throw new Error(t.log.filter((l) => l.kind === "error").at(-1)?.text ?? "Claude berhenti");
-      };
-      await step("gaya", async () => {
-        const sk = p().skill;
-        if (!sk) return "Proyek tanpa gaya edit";
-        if ((await this.library())?.template) return "Gaya sudah siap";
-        if (!claudeOk) return "Claude belum terhubung";
-        const dir = versionDir(sk.id, sk.version);
-        await runClaude("Siapkan gaya edit", buildPrompt("generate-skill", "", null, { ...sk, dir }), { skill: { ...sk, dir }, addDirs: [dir] });
-        this.reloadLibrary();
-        if (!(await this.library())?.template) throw new Error("Claude belum menyimpan gaya");
-      });
-      await step("tata", async () => {
-        const lib = await this.library();
-        if (!lib?.template) return "Gaya edit belum siap";
-        if (!claudeOk) return "Claude belum terhubung";
-        if (!p().transcript.words.length) return "Butuh transkrip";
-        await runClaude("Tata gaya otomatis", buildPrompt("auto-style", "", p()), { addDirs: [versionDir(lib.id, lib.version)] });
       });
     } finally {
       this.auto.running = false;
@@ -329,6 +379,8 @@ export class Session {
       jobs: Object.fromEntries(h.project.media.map((m) => [m.id, this.jobs.status.get(m.id) ?? { stage: "menunggu", progress: 0 }])),
       tx: Object.fromEntries(this.tx),
       claude: this.claude.view(),
+      claudeFocus: this.claudeFocus,
+      claudeNote: this.claudeNote,
       pending: this.pending.map(({ id, label, at }) => ({ id, label, at })),
       busy: this.busy,
       auto: this.auto,

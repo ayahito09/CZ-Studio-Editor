@@ -77,9 +77,28 @@ export interface Caption {
   position: { preset: "atas" | "dada" | "bawah"; x?: number; y?: number };
 }
 
+/** Kurva mesin gerak CZ. Disimpan sebagai nama; diterjemahkan di packages/composition/src/motion (curve()). */
+export const CURVES = ["move", "moveSoft", "enter", "enterSnap", "exit", "exitHard", "drift", "linear", "gentle", "gentleOut", "spring", "pop"] as const;
+export type CurveName = (typeof CURVES)[number];
+/** Transisi masuk scene: separuh di ekor scene sebelumnya, separuh di kepala scene ini (durasi video tetap). */
+export const TRANSITIONS = ["cut", "blur", "whip", "zoom", "flash", "collapse"] as const;
+export type TransitionKind = (typeof TRANSITIONS)[number];
+
 export interface Transform { x: number; y: number; scale: number; rotation: number; opacity: number; }
-/** Frame relatif terhadap awal aset. */
-export interface Keyframe { frame: number; x?: number; y?: number; scale?: number; rotation?: number; opacity?: number; }
+/** Frame relatif terhadap awal aset. ease = kurva segmen yang TIBA di key ini (seperti kurva masuk After Effects). */
+export interface Keyframe { frame: number; x?: number; y?: number; scale?: number; rotation?: number; opacity?: number; ease?: CurveName }
+
+/** Gerak kamera aditif (frame relatif awal scene): delta dengan kurvanya sendiri; gerak yang tumpang tindih dijumlahkan,
+ *  jadi kamera tidak berhenti di antara dua gerakan. x/y piksel dunia, zoom pengali di akhir gerak (1.15 = dorong 15%). */
+export interface CameraMove {
+  at: number; dur: number; x?: number; y?: number; zoom?: number; rot?: number; ease?: CurveName;
+  /** Frame bertahan di puncak, lalu gerak KELUAR (kembali ke posisi sebelum gerak) selama `out` frame. Tanpa `out`, gerak menetap seterusnya. */
+  hold?: number; out?: number;
+}
+export interface CameraShake { at: number; dur?: number; amp?: number }
+/** from/to: zoom dasar lama (opsional). Drift halus selalu jalan kecuali drift: false. */
+export interface SceneCamera { from?: number; to?: number; moves?: CameraMove[]; shake?: CameraShake[]; drift?: boolean }
+export interface SceneTransition { kind: TransitionKind; frames: number }
 export interface AssetInstance {
   id: string; trackId: string;
   /** null = aset bebas (dibuat dari nol, bukan dari definisi template). */
@@ -104,10 +123,15 @@ export interface Scene {
   start: number; end: number;
   options: SceneOption[]; choice: string | null;
   custom: Record<string, unknown>;
-  /** Gerak kamera footage selama scene (skala 1 = tanpa zoom). */
-  camera: { from: number; to: number } | null;
+  /** Gerak kamera footage selama scene (mesin kamera aditif CZ). */
+  camera: SceneCamera | null;
+  /** Transisi masuk scene ini dari scene sebelumnya. */
+  transition?: SceneTransition | null;
   status: SceneStatus;
+  /** Scene digambar komponen Remotion milik skill (id komposisi + props JSON); footage dan caption CZ disembunyikan di rentangnya. */
+  skill?: SceneSkill | null;
 }
+export interface SceneSkill { component: string; props: Record<string, unknown> }
 
 export interface NoteReply { by: "claude" | "user"; text: string; at: number; }
 export type NoteStatus = "terbuka" | "selesai" | "konflik";

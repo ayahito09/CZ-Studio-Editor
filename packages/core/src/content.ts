@@ -1,8 +1,10 @@
 // Op untuk transkrip, potongan, aset, caption, scene, dan catatan (F3–F7).
 // Bentuk dicek di validateContentOp; isi dijalankan di runContent di atas draft Immer.
 import { wordFrames } from "./analysis.ts";
-import type {
-  AssetInstance, Caption, CaptionWord, Cut, CutKind, Keyframe, Note, NoteStatus, Project, Scene, SceneStatus, Transform,
+import {
+  CURVES, TRANSITIONS,
+  type AssetInstance, type Caption, type CaptionWord, type Cut, type CutKind, type CurveName, type Keyframe, type Note, type NoteStatus, type Project,
+  type Scene, type SceneStatus, type Transform, type TransitionKind,
 } from "./project.ts";
 import type { NewAsset } from "./skill.ts";
 import { clipEnd, deleteRange, newId, OpError } from "./timeline.ts";
@@ -61,13 +63,44 @@ function checkTransform(t: unknown): string | null {
   if (t.opacity !== undefined && !((t.opacity as number) >= 0 && (t.opacity as number) <= 1)) return "opasitas harus 0-1";
   return null;
 }
+const checkEase = (v: unknown) => v === undefined || CURVES.includes(v as CurveName) ? null : `kurva harus ${CURVES.join("/")}`;
 function checkKeyframes(k: unknown): string | null {
   if (!Array.isArray(k) || k.length > 200) return "keyframes harus daftar (maks 200)";
   for (const f of k) {
     if (!isObj(f) || !isInt(f.frame, 0)) return "keyframe butuh frame ≥ 0";
-    const err = checkTransform(Object.fromEntries(Object.entries(f).filter(([key]) => key !== "frame")));
+    const err = checkEase(f.ease) ?? checkTransform(Object.fromEntries(Object.entries(f).filter(([key]) => key !== "frame" && key !== "ease")));
     if (err) return err;
   }
+  return null;
+}
+function checkCamera(c: unknown): string | null {
+  if (c === null) return null;
+  if (!isObj(c)) return "camera harus objek";
+  for (const k of ["from", "to"]) if (c[k] !== undefined && !(isNum(c[k]) && (c[k] as number) > 0.1 && (c[k] as number) <= 5)) return `camera.${k} harus 0.1-5`;
+  if (c.drift !== undefined && typeof c.drift !== "boolean") return "camera.drift harus true/false";
+  if (c.moves !== undefined) {
+    if (!Array.isArray(c.moves) || c.moves.length > 60) return "camera.moves maks 60";
+    for (const m of c.moves) {
+      if (!isObj(m) || !isInt(m.at, 0) || !isInt(m.dur, 1, 3600)) return "gerak kamera butuh at ≥ 0 dan dur ≥ 1 (frame)";
+      for (const k of ["x", "y", "rot"]) if (m[k] !== undefined && !(isNum(m[k]) && Math.abs(m[k] as number) <= 10_000)) return `gerak kamera ${k} tidak sah`;
+      if (m.zoom !== undefined && !(isNum(m.zoom) && (m.zoom as number) > 0.1 && (m.zoom as number) <= 5)) return "zoom gerak kamera harus 0.1-5";
+      const e = checkEase(m.ease); if (e) return e;
+      if (m.hold !== undefined && !isInt(m.hold, 0, 3600)) return "hold gerak kamera harus 0-3600 frame";
+      if (m.out !== undefined && !isInt(m.out, 1, 3600)) return "out gerak kamera harus 1-3600 frame";
+      for (const k of Object.keys(m)) if (!["at", "dur", "x", "y", "zoom", "rot", "ease", "hold", "out"].includes(k)) return `field gerak kamera tidak dikenal: ${k}`;
+    }
+  }
+  if (c.shake !== undefined) {
+    if (!Array.isArray(c.shake) || c.shake.length > 30) return "camera.shake maks 30";
+    for (const s of c.shake) if (!isObj(s) || !isInt(s.at, 0) || (s.dur !== undefined && !isInt(s.dur, 1, 120)) || (s.amp !== undefined && !(isNum(s.amp) && (s.amp as number) >= 0 && (s.amp as number) <= 60))) return "shake butuh at, dur 1-120, amp 0-60";
+  }
+  for (const k of Object.keys(c)) if (!["from", "to", "moves", "shake", "drift"].includes(k)) return `field camera tidak dikenal: ${k}`;
+  return null;
+}
+function checkTransition(t: unknown): string | null {
+  if (t === null) return null;
+  if (!isObj(t) || !TRANSITIONS.includes(t.kind as TransitionKind) || !isInt(t.frames, 0, 120)) return `transition butuh kind ${TRANSITIONS.join("/")} dan frames 0-120`;
+  for (const k of Object.keys(t)) if (!["kind", "frames"].includes(k)) return `field transition tidak dikenal: ${k}`;
   return null;
 }
 function checkAssetFields(a: Record<string, unknown>, p: Project, partial: boolean): string | null {
@@ -121,10 +154,16 @@ function checkScene(s: unknown, partial: boolean): string | null {
   }
   if (s.choice !== undefined && s.choice !== null && !isStr(s.choice, 10)) return "choice tidak sah";
   if (s.custom !== undefined && (!isObj(s.custom) || size(s.custom) > 10_000)) return "custom harus objek";
-  if (s.camera !== undefined && s.camera !== null && (!isObj(s.camera) || !isNum(s.camera.from) || !isNum(s.camera.to))) return "camera butuh from dan to";
+  if (s.camera !== undefined) { const e = checkCamera(s.camera); if (e) return e; }
+  if (s.transition !== undefined) { const e = checkTransition(s.transition); if (e) return e; }
   if (s.status !== undefined && !SCENE_STATUS.includes(s.status as SceneStatus)) return `status scene harus ${SCENE_STATUS.join("/")}`;
+  if (s.skill !== undefined && s.skill !== null) {
+    if (!isObj(s.skill) || typeof s.skill.component !== "string" || !/^[A-Za-z_][\w-]{0,79}$/.test(s.skill.component)) return "skill scene butuh component (id komposisi)";
+    if (!isObj(s.skill.props) || size(s.skill.props) > 200_000) return "props skill harus objek (maks 200 KB)";
+    for (const k of Object.keys(s.skill)) if (!["component", "props"].includes(k)) return `field skill scene tidak dikenal: ${k}`;
+  }
   if (s.id !== undefined && (partial || !isStr(s.id, 40))) return "id scene tidak sah";
-  for (const k of Object.keys(s)) if (!["id", "title", "beat", "summary", "reason", "start", "end", "options", "choice", "custom", "camera", "status"].includes(k)) return `field scene tidak dikenal: ${k}`;
+  for (const k of Object.keys(s)) if (!["id", "title", "beat", "summary", "reason", "start", "end", "options", "choice", "custom", "camera", "transition", "status", "skill"].includes(k)) return `field scene tidak dikenal: ${k}`;
   return null;
 }
 const checkImages = (v: unknown) => v === undefined || (Array.isArray(v) && v.length <= 6 && v.every((x) => isStr(x, 300) && !String(x).includes("..")));
@@ -287,7 +326,8 @@ function sceneFrom(s: NewScene, id: string): Scene {
   return {
     id, title: s.title.trim(), beat: s.beat ?? "", summary: s.summary ?? "", reason: s.reason ?? "",
     start: s.start, end: Math.max(s.start + 1, s.end), options: s.options ?? [], choice: s.choice ?? s.options?.find((o) => o.star)?.id ?? null,
-    custom: s.custom ?? {}, camera: s.camera ?? null, status: s.status ?? "draft",
+    custom: s.custom ?? {}, camera: s.camera ?? null, status: s.status ?? "draft", ...(s.skill ? { skill: s.skill } : {}),
+    ...(s.transition ? { transition: s.transition } : {}),
   };
 }
 

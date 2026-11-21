@@ -1,8 +1,10 @@
-// Template dan definisi aset hasil membaca skill (SPEC: "Skill menjadi template dan pustaka aset").
-// Semuanya JSON deklaratif: Claude tidak menulis kode yang dijalankan.
+// Definisi aset: isi yang bisa diubah (params) + cara menggambar. Aset baru selalu berupa KODE (component):
+// komponen bawaan CZ ("cz.*", packages/composition/src/assets) atau komposisi skill ("skill:<Id>"), digerakkan mesin
+// cz-motion. Pohon elemen deklaratif (tree) hanya dibaca untuk proyek/skill lama.
 import type { AssetInstance, Scene, Transform } from "./project.ts";
 
-export type ParamType = "text" | "list" | "color" | "number" | "bool" | "select" | "image" | "icon";
+/** media = id video proyek (b-roll). */
+export type ParamType = "text" | "list" | "color" | "number" | "bool" | "select" | "image" | "icon" | "media";
 export interface ParamDef {
   type: ParamType; default?: unknown; label?: string;
   min?: number; max?: number; step?: number; unit?: string;
@@ -25,6 +27,8 @@ export interface AssetDef {
   description?: string;
   params: Record<string, ParamDef>;
   layout: { anchor?: string; x?: number | string; y?: number | string; w?: number | string; h?: number | string; safeArea?: boolean };
+  /** Komponen kode yang menggambar aset ("cz.chat", "skill:AsetKartu"). Bila ada, tree diabaikan. */
+  component?: string;
   tree: Element[];
   in?: Anim; out?: Anim;
   sfx?: { in?: string; out?: string };
@@ -36,9 +40,33 @@ export interface AssetDef {
 
 export interface TextStyle { font?: string; size?: number; weight?: number; color?: string; lineHeight?: number; uppercase?: boolean; letterSpacing?: number; italic?: boolean }
 export interface CaptionStyle extends TextStyle {
-  accent?: string; activeColor?: string; activeEffect?: "warna" | "skala" | "latar" | "tidak";
+  accent?: string; activeColor?: string; activeEffect?: "pil" | "garis" | "glow" | "warna" | "skala" | "latar" | "tidak";
   wordsPerLine?: number; maxLines?: number; in?: string; out?: string;
   stroke?: string; shadow?: string; background?: string;
+  /** Gaya subtitle (tata letak blok caption), lihat CAPTION_LAYOUTS. Kosong = kata per kata. */
+  layout?: CaptionLayout;
+  /** Aksen kata kunci blok, lihat KEY_ACCENTS. Kosong = mengikuti gaya per kata (tebal/serif/aksen). */
+  keyAccent?: KeyAccent;
+}
+/** Gaya subtitle (board Clean Editing, tab Caption). */
+export const CAPTION_LAYOUTS = [
+  { id: "kata", label: "Kata per kata" }, { id: "dua-tingkat", label: "Dua tingkat" }, { id: "subtitle-italic", label: "Subtitle italic" },
+  { id: "satu-kata", label: "Satu kata" }, { id: "poster", label: "Poster kecil-besar" },
+] as const;
+export type CaptionLayout = (typeof CAPTION_LAYOUTS)[number]["id"];
+/** Aksen kata kunci (board Clean Editing, tab Aksen teks). */
+export const KEY_ACCENTS = [
+  { id: "serif", label: "Serif italic" }, { id: "tebal", label: "Tebal" }, { id: "elips", label: "Elips merah" }, { id: "pil", label: "Pil miring" },
+  { id: "glow", label: "Glow aksen" }, { id: "titik", label: "Titik aksen" }, { id: "scramble", label: "Scramble" }, { id: "tanpa", label: "Tanpa aksen" },
+] as const;
+export type KeyAccent = (typeof KEY_ACCENTS)[number]["id"];
+/** Kata kunci satu blok caption: kata pertama yang diberi gaya (tebal/serif/aksen), selain itu kata terpanjang. -1 bila kosong. */
+export function keyWordIndex(words: { text: string; style: string }[]): number {
+  const marked = words.findIndex((w) => w.style !== "normal");
+  if (marked >= 0) return marked;
+  let best = -1, len = 0;
+  words.forEach((w, i) => { const n = w.text.replace(/[^\p{L}\p{N}]/gu, "").length; if (n > len) { best = i; len = n; } });
+  return best;
 }
 export interface PresetAsset { defId: string; at?: "awal" | "tengah" | "akhir" | number; duration?: number; params?: Record<string, unknown> }
 export interface StylePreset {
@@ -61,11 +89,20 @@ export interface Template {
   sfx?: Record<string, string>;
   rules?: { auto?: string[]; scenes?: string; notes?: string[]; forbid?: string[] };
   warnings?: string[];
+  /** Semua elemen yang disebut skill (id aset yang akan dipakai, nama, lokasi di skill). Definisinya dibuat saat sebuah video membutuhkannya. */
+  catalog?: CatalogItem[];
 }
+export interface CatalogItem { id: string; name: string; source?: string; trigger?: string }
+
+/** Elemen katalog yang belum punya definisi aset: dibuat Claude hanya bila video membutuhkannya. */
+export const missingAssets = (t: Template, defIds: Iterable<string>): CatalogItem[] => {
+  const have = new Set(defIds);
+  return (t.catalog ?? []).filter((c) => !have.has(c.id));
+};
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStr = (v: unknown, max = 200) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
-const PARAM_TYPES: ParamType[] = ["text", "list", "color", "number", "bool", "select", "image", "icon"];
+const PARAM_TYPES: ParamType[] = ["text", "list", "color", "number", "bool", "select", "image", "icon", "media"];
 export const SAFE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 /** Properti yang dikenali renderer (packages/composition). Selain ini diabaikan diam-diam, jadi elemennya tampil polos. */
@@ -122,8 +159,9 @@ export function validateAssetDef(d: unknown): string[] {
     if (!isObj(p) || !PARAM_TYPES.includes(p.type as ParamType)) errs.push(`param ${k}: type harus salah satu ${PARAM_TYPES.join(", ")}`);
   }
   if (!isObj(d.layout)) errs.push("layout bukan objek");
+  if (d.component !== undefined && !(typeof d.component === "string" && /^(cz\.[a-z0-9-]+|skill:[A-Za-z_][\w-]{0,79})$/.test(d.component))) errs.push("component harus cz.<nama> atau skill:<IdKomposisi>");
   checkTree(d.tree, "tree", errs);
-  if (Array.isArray(d.tree) && !errs.length && !d.tree.some((e) => isObj(e) && visible(e))) errs.push("tree tidak menampilkan apa pun: beri fill/stroke pada rect, text/bind pada text, dst.");
+  if (!d.component && Array.isArray(d.tree) && !errs.length && !d.tree.some((e) => isObj(e) && visible(e))) errs.push("tree tidak menampilkan apa pun: beri fill/stroke pada rect, text/bind pada text, dst.");
   if (JSON.stringify(d).length > 100_000) errs.push("definisi aset terlalu besar (maks 100 KB)");
   return errs;
 }
@@ -141,6 +179,7 @@ export function validateTemplate(t: unknown): string[] {
     else if (p.assets !== undefined && (!Array.isArray(p.assets) || p.assets.some((a) => !isObj(a) || !isStr(a.defId, 80)))) errs.push(`stylePresets[${i}].assets tidak sah`);
   });
   if (t.controls !== undefined && !Array.isArray(t.controls)) errs.push("controls bukan daftar");
+  if (t.catalog !== undefined && (!Array.isArray(t.catalog) || t.catalog.some((c) => !isObj(c) || !isStr(c.id, 80) || !SAFE_ID.test(String(c.id)) || !isStr(c.name)))) errs.push("catalog harus daftar {id, name, source}");
   if (t.sfx !== undefined && (!isObj(t.sfx) || Object.values(t.sfx).some((v) => typeof v !== "string" || v.includes("..")))) errs.push("sfx harus peta peran → path di dalam folder skill");
   if (JSON.stringify(t).length > 300_000) errs.push("template terlalu besar (maks 300 KB)");
   return errs;
