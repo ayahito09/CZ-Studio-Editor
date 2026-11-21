@@ -196,6 +196,7 @@ export function describeOp(op: Op): string {
     case "replyNote": return "Balas catatan";
     case "removeNote": return "Hapus catatan";
     case "setSkill": return op.skill ? "Ganti gaya edit" : "Lepas gaya edit";
+    case "setCamera": return "Atur kamera";
   }
 }
 

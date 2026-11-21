@@ -15,7 +15,7 @@ import { ACTION_LABEL, ACTIONS, buildPrompt, componentGuide, estimate, SOURCE_AC
 import { hasComponent } from "./skillCode.ts";
 import { MOTION_BLUR, renderFiles, renderQueue, type RenderSettings } from "./render.ts";
 import { Session } from "./session.ts";
-import { autoCameraOp } from "./tools.ts";
+import { autoBaseCameraOp, autoCameraOp } from "./tools.ts";
 import { detectSubject, faceEngineReady, subjectFile, subjectState } from "./faces.ts";
 import { addSkill, COMPONENT_FILE, compositionLib, isArchive, getMeta, inventory, listSkills, loadLibrary, skillDataDir, skillFile, versionDir } from "./skills.ts";
 import { callTool, toolList } from "./tools.ts";
@@ -151,6 +151,17 @@ export async function startServer(opts: Options) {
     const s = needSession();
     const ids = body(req).ids;
     const op = await autoCameraOp(s, Array.isArray(ids) ? ids.map(String) : undefined);
+    if (typeof op === "string") throw bad(op);
+    const err = s.apply(op);
+    if (err) throw bad(err);
+    return state();
+  });
+  app.post("/api/camera/auto", async (req) => {
+    const s = needSession();
+    const r = body(req).ranges;
+    const ranges = Array.isArray(r) ? r.map((x) => [Math.max(0, Math.round(Number(x?.[0]))), Math.round(Number(x?.[1]))] as [number, number]) : [];
+    if (!ranges.length || ranges.some(([a, b]) => !Number.isFinite(a) || !Number.isFinite(b) || b <= a)) throw bad("ranges tidak sah");
+    const op = await autoBaseCameraOp(s, ranges);
     if (typeof op === "string") throw bad(op);
     const err = s.apply(op);
     if (err) throw bad(err);

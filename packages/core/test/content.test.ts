@@ -241,6 +241,18 @@ test("mesin gerak: kamera aditif, transisi scene, dan easing keyframe divalidasi
   assert.ok(h.apply({ type: "updateAsset", id: h.project.assets[0].id, changes: { keyframes: [{ frame: 0, x: 1, ease: "zigzag" }] } }));
 });
 
+test("kamera dasar proyek: bisa diatur tanpa rencana, tetap ada setelah rencana dibuat, dan divalidasi", () => {
+  const h = withWords();
+  const camera = { moves: [{ at: 30, dur: 24, hold: 20, out: 24, zoom: 1.08, ease: "move" }], drift: true };
+  ok(h, { type: "setCamera", camera });
+  assert.deepEqual(h.project.camera, camera);
+  ok(h, { type: "setScenes", scenes: [{ title: "A", start: 0, end: 60 }] });
+  assert.deepEqual(h.project.camera, camera); // rencana tidak menyentuh kamera dasar
+  assert.ok(h.apply({ type: "setCamera", camera: { moves: [{ at: 0, dur: 0 }] } }));
+  ok(h, { type: "setCamera", camera: null });
+  assert.equal(h.project.camera, null);
+});
+
 test("caption: kata kunci = kata pertama bergaya, selain itu kata terpanjang", () => {
   const w = (text: string, style = "normal") => ({ text, style });
   assert.equal(keyWordIndex([w("ini"), w("premium", "serif"), w("banget", "tebal")]), 1);

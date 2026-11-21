@@ -155,6 +155,8 @@ export interface Project {
   captions: Caption[];
   assets: AssetInstance[];
   scenes: Scene[];
+  /** Kamera dasar, tidak terikat rencana: frame `at` relatif awal sequence. Dipakai di rentang yang scene-nya (bila ada) tidak punya kamera sendiri. */
+  camera?: SceneCamera | null;
   cuts: Cut[];
   notes: Note[];
   markers: Marker[];

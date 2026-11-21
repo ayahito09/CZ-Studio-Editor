@@ -94,6 +94,7 @@ export const api = {
   create: (title: string, folder?: string, skill?: { id: string; version: number }) => post("new", { title, folder, skill }),
   autoStart: () => post("auto/start"),
   autoCamera: (ids?: string[]) => post("scenes/auto-camera", { ids }),
+  autoBaseCamera: (ranges: [number, number][]) => post("camera/auto", { ranges }),
   subjects: () => get<{ subjects: Record<string, string>; busy: string[] }>("subjects"),
   makeSubject: (mediaId: string) => postAny<{ ok: boolean }>(`media/${mediaId}/subject/make`, {}),
   forget: (folder: string) => post("recent/forget", { folder }),

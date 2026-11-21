@@ -32,12 +32,16 @@ export function Camera({ project, children }: { project: Project; children: Reac
   const scenes = project.scenes;
   const i = scenes.findIndex((s) => f >= s.start && f < s.end);
   const sc = i >= 0 ? scenes[i] : null;
-  const o = sc ? camOptsOf(sc, fps) : { fps };
-  const drift = !sc || sc.camera?.drift !== false;
+  // Kamera scene menang; scene tanpa kamera (atau tanpa rencana sama sekali) memakai kamera dasar proyek.
+  const base = project.camera ? ({ start: 0, end: project.sequence.durationFrames, camera: project.camera } as Scene) : null;
+  const eff = (s: Scene | null) => (s?.camera ? s : base);
+  const optsOf = (s: Scene | null): CamOpts => { const e = eff(s); return e ? camOptsOf(e, fps) : { fps }; };
+  const o = optsOf(sc);
+  const drift = eff(sc)?.camera?.drift !== false;
   // Kamera mewarisi posisi akhir scene sebelumnya lalu kembali ke posisinya sendiri (EASE_PRO.move), kecuali ada transisi besar.
   const prev = i > 0 ? scenes[i - 1] : null;
   const carry = prev && sc && (!sc.transition || sc.transition.kind === "cut" || sc.transition.kind === "blur");
-  const a = carry ? camState(prev.end - 1, camOptsOf(prev, fps)) : null;
+  const a = carry ? camState(prev.end - 1, optsOf(prev)) : null;
   const b = carry ? camState(sc.start, o) : null;
   const dur = T(16);
   const extra = (fr: number) => {
@@ -213,6 +217,8 @@ export function motionMask(project: Project, defs: Map<string, AssetDef>): Uint8
     if (a.anim.out) mark(a.start + a.duration - (d?.out?.frames ?? T(10)) - 1, a.start + a.duration);
     if (a.keyframes.length > 1) mark(a.start + Math.min(...a.keyframes.map((k) => k.frame)), a.start + Math.max(...a.keyframes.map((k) => k.frame)));
   }
+  for (const mv of project.camera?.moves ?? []) mark(mv.at, mv.at + mv.dur + (mv.hold ?? 0) + (mv.out ?? 0));
+  for (const sh of project.camera?.shake ?? []) mark(sh.at, sh.at + (sh.dur ?? 8));
   project.scenes.forEach((s, i) => {
     for (const mv of s.camera?.moves ?? []) mark(s.start + mv.at, s.start + mv.at + mv.dur);
     for (const sh of s.camera?.shake ?? []) mark(s.start + sh.at, s.start + sh.at + (sh.dur ?? 8));
@@ -225,4 +231,4 @@ export function motionMask(project: Project, defs: Map<string, AssetDef>): Uint8
 }
 
 export const useMotionMask = (project: Project, defs: Map<string, AssetDef>, on: boolean) =>
-  useMemo(() => (on ? motionMask(project, defs) : null), [on, project.assets, project.scenes, project.clips, project.transcript, project.sequence, defs]);
+  useMemo(() => (on ? motionMask(project, defs) : null), [on, project.assets, project.scenes, project.clips, project.transcript, project.sequence, project.camera, defs]);

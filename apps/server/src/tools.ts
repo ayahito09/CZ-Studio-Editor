@@ -44,8 +44,8 @@ async function faceAt(s: Session, f: number): Promise<Box | null> {
   return near ? faceToSeq({ x: near[1], y: near[2], w: near[3], h: near[4] }, media, p.sequence) : null;
 }
 
-/** Kamera tiap scene dari isi ucapannya: dorong ke wajah di kata yang ditekankan, tahan, lalu keluar. Scene skill dilewati (kameranya milik skill). */
-export async function autoCameraOp(s: Session, ids?: string[]): Promise<Op | string> {
+/** Mesin kamera CZ: kamera dari isi ucapan di rentang frame sequence mana pun (scene atau bukan), `at` relatif awal rentang. */
+async function cameraEngine(s: Session) {
   let p = s.history.project;
   // Mesin wajah CZ: pastikan setiap video punya hasil deteksi (dibuat sekali, lalu dipakai ulang).
   await Promise.all(p.media.filter((m) => m.width > 0).map((m) => detectFaces(s.folder, m).catch(() => false)));
@@ -66,13 +66,30 @@ export async function autoCameraOp(s: Session, ids?: string[]): Promise<Op | str
     return { x: (b.x0 + b.x1) / 2 - p.sequence.width / 2, y: (b.y0 + b.y1) / 2 - p.sequence.height / 2 };
   };
   const marked = new Set(p.captions.flatMap((c) => c.words.filter((w) => w.style !== "normal" && w.wordId).map((w) => w.wordId as string)));
-  const ops: Op[] = [];
-  for (const sc of p.scenes) {
-    if (sc.skill || (ids?.length && !ids.includes(sc.id))) continue;
-    const words = p.transcript.words.flatMap((w) => { const f = wf.get(w.id); return f && f.start >= sc.start && f.start < sc.end ? [{ start: f.start - sc.start, end: Math.min(f.end, sc.end) - sc.start, emphasis: marked.has(w.id) }] : []; });
-    ops.push({ type: "updateScene", id: sc.id, changes: { camera: cameraFromContent({ duration: sc.end - sc.start, fps, words, faceAt: (f) => faceCenter(sc.start + f) }) } });
-  }
+  return (start: number, end: number) => {
+    const words = p.transcript.words.flatMap((w) => { const f = wf.get(w.id); return f && f.start >= start && f.start < end ? [{ start: f.start - start, end: Math.min(f.end, end) - start, emphasis: marked.has(w.id) }] : []; });
+    return cameraFromContent({ duration: end - start, fps, words, faceAt: (f) => faceCenter(start + f) });
+  };
+}
+
+/** Kamera tiap scene dari isi ucapannya: dorong ke wajah di kata yang ditekankan, tahan, lalu keluar. Scene skill dilewati (kameranya milik skill). */
+export async function autoCameraOp(s: Session, ids?: string[]): Promise<Op | string> {
+  const cam = await cameraEngine(s);
+  const ops: Op[] = s.history.project.scenes
+    .filter((sc) => !sc.skill && !(ids?.length && !ids.includes(sc.id)))
+    .map((sc) => ({ type: "updateScene", id: sc.id, changes: { camera: cam(sc.start, sc.end) } }));
   return ops.length ? { type: "batch", label: "Kamera sesuai isi video", ops } : "Tidak ada scene yang bisa diatur (scene skill memakai kameranya sendiri)";
+}
+
+/** Kamera dasar proyek di rentang frame yang diberi (tanpa rencana): isi rentang diganti hasil mesin, di luarnya dibiarkan. */
+export async function autoBaseCameraOp(s: Session, ranges: [number, number][]): Promise<Op | string> {
+  const cam = await cameraEngine(s);
+  const old = s.history.project.camera;
+  const inside = (f: number) => ranges.some(([a, b]) => f >= a && f < b);
+  const moves = (old?.moves ?? []).filter((m) => !inside(m.at));
+  const shake = (old?.shake ?? []).filter((x) => !inside(x.at));
+  for (const [a, b] of ranges) if (b > a) moves.push(...(cam(a, b).moves ?? []).map((m) => ({ ...m, at: m.at + a })));
+  return { type: "setCamera", camera: { ...old, moves: moves.sort((x, y) => x.at - y.at), shake, drift: old?.drift ?? true } };
 }
 
 /** Periksa penempatan aset sebelum dipasang/diubah: harus sudah melihat video di rentangnya, tidak menutupi wajah, tetap di area aman.

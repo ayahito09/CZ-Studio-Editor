@@ -4,7 +4,7 @@ import { wordFrames } from "./analysis.ts";
 import {
   CURVES, TRANSITIONS,
   type AssetInstance, type Caption, type CaptionWord, type Cut, type CutKind, type CurveName, type Keyframe, type Note, type NoteStatus, type Project,
-  type Scene, type SceneStatus, type Transform, type TransitionKind,
+  type Scene, type SceneCamera, type SceneStatus, type Transform, type TransitionKind,
 } from "./project.ts";
 import type { NewAsset } from "./skill.ts";
 import { clipEnd, deleteRange, newId, OpError } from "./timeline.ts";
@@ -37,7 +37,8 @@ export type ContentOp =
   | { type: "updateNote"; id: string; changes: { text?: string; status?: NoteStatus; frame?: number; images?: string[] } }
   | { type: "replyNote"; id: string; by: "claude" | "user"; text: string }
   | { type: "removeNote"; id: string }
-  | { type: "setSkill"; skill: { id: string; version: number } | null };
+  | { type: "setSkill"; skill: { id: string; version: number } | null }
+  | { type: "setCamera"; camera: SceneCamera | null };
 
 export const CONTENT_SERVER_ONLY = ["setTranscript", "setSkill"];
 
@@ -254,6 +255,8 @@ export function validateContentOp(op: Record<string, unknown>, p: Project): stri
       return p.notes.some((n) => n.id === op.id) ? null : "catatan tidak ada";
     case "setSkill":
       return op.skill === null || (isObj(op.skill) && isStr(op.skill.id, 80) && isInt(op.skill.version, 1)) ? null : "skill tidak sah";
+    case "setCamera":
+      return checkCamera(op.camera === undefined ? "?" : op.camera);
     default:
       return undefined;
   }
@@ -462,6 +465,7 @@ export function runContent(d: Project, op: ContentOp): boolean {
     case "replyNote": findOr(d.notes, op.id, "catatan").replies.push({ by: op.by, text: op.text, at: Date.now() }); return true;
     case "removeNote": d.notes = d.notes.filter((n) => n.id !== op.id); return true;
     case "setSkill": d.skill = op.skill; return true;
+    case "setCamera": d.camera = op.camera; return true;
   }
   return false;
 }
