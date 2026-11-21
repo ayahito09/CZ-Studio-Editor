@@ -1,5 +1,6 @@
 // Skema project.cz.json (docs/SPEC.md, "Model data proyek").
 // Bagian yang belum dipakai fase ini disimpan apa adanya sebagai unknown[] dan diberi tipe di fasenya.
+import type { SafeEdges } from "./safeEdges.ts";
 
 export const PROJECT_VERSION = 1;
 
@@ -25,6 +26,8 @@ export interface Sequence {
 
 export interface Media {
   id: string;
+  /** Tidak diisi = video. "image" = foto untuk slot elemen (tidak masuk timeline, tanpa proxy/audio). */
+  kind?: "video" | "image";
   name: string;
   /** Relatif ke folder proyek (disalin) atau absolut (ditautkan). */
   path: string;
@@ -99,6 +102,14 @@ export interface CameraShake { at: number; dur?: number; amp?: number }
 /** from/to: zoom dasar lama (opsional). Drift halus selalu jalan kecuali drift: false. */
 export interface SceneCamera { from?: number; to?: number; moves?: CameraMove[]; shake?: CameraShake[]; drift?: boolean }
 export interface SceneTransition { kind: TransitionKind; frames: number }
+/** at = frame sequence tempat potongan berikutnya mulai. */
+export interface BaseTransition extends SceneTransition {
+  at: number;
+  /** Peran SFX di sambungan: tidak diisi = bunyi bawaan jenisnya, null = tanpa bunyi. */
+  sfx?: string | null;
+  /** Dipasang mesin CZ (bukan user): boleh dihitung ulang saat sambungan berubah. */
+  auto?: boolean;
+}
 export interface AssetInstance {
   id: string; trackId: string;
   /** null = aset bebas (dibuat dari nol, bukan dari definisi template). */
@@ -157,6 +168,12 @@ export interface Project {
   scenes: Scene[];
   /** Kamera dasar, tidak terikat rencana: frame `at` relatif awal sequence. Dipakai di rentang yang scene-nya (bila ada) tidak punya kamera sendiri. */
   camera?: SceneCamera | null;
+  /** Pelindung area aman dasar (seluruh video), tidak terikat rencana. Scene yang punya `custom.safe` sendiri menimpanya. */
+  safe?: SafeEdges | null;
+  /** Transisi di sambungan potongan, tidak terikat rencana. Transisi milik scene (bila ada) menang di batasnya. */
+  transitions?: BaseTransition[];
+  /** true: mesin CZ memasang transisi + SFX otomatis di tiap sambungan footage (proyek baru). */
+  autoFx?: boolean;
   cuts: Cut[];
   notes: Note[];
   markers: Marker[];
@@ -206,6 +223,7 @@ export function createProject(title: string, id = "p_" + Math.random().toString(
       track("A3", "audio", "Musik"),
     ],
     clips: [], captions: [], assets: [], scenes: [], cuts: [], notes: [], markers: [],
+    autoFx: true,
   };
 }
 

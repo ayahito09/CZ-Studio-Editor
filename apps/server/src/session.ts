@@ -1,5 +1,5 @@
 import { copyFile, mkdir, readFile, rename, writeFile, access } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import {
   applyOp, buildCaptions, checkCuts, createProject, DEFAULT_SILENCE, describeOp, detectSilences, expandPreset, History, newId, srcToSeq, suggestFillers, validateOp, validateProject,
   type Media, type Op, type Project, type SilenceOptions, type Source,
@@ -11,7 +11,7 @@ import { getSettings } from "./config.ts";
 import { builtinSfxRoles } from "./builtin.ts";
 import { hasComponent, type CodeTarget } from "./skillCode.ts";
 import { forkVersion, loadLibrary, versionDir, type Library } from "./skills.ts";
-import { ENV_RATE, envelope, mediaFile, MediaJobs, probe } from "./media.ts";
+import { ENV_RATE, envelope, IMAGE_EXT, mediaFile, MediaJobs, probe, probeImage } from "./media.ts";
 import { engineStatus, transcribe } from "./transcribe.ts";
 
 export type AutoState = "menunggu" | "berjalan" | "selesai" | "dilewati" | "gagal";
@@ -95,11 +95,13 @@ export class Session {
   redo() { if (this.history.redo()) { this.dirty = true; void this.jobs.ensure(this.history.project.media); } }
 
   /** path: relatif ke folder proyek (sudah disalin) atau absolut (ditautkan). */
-  async importMedia(path: string, linked: boolean): Promise<Media> {
-    const info = await probe(linked ? path : join(this.folder, path));
+  /** place=false: masuk pustaka media saja, tidak ditaruh di timeline (foto/video untuk slot elemen). Foto selalu begitu. */
+  async importMedia(path: string, linked: boolean, place = true): Promise<Media> {
+    const image = IMAGE_EXT.has(extname(path).toLowerCase());
+    const info = image ? await probeImage(linked ? path : join(this.folder, path)) : await probe(linked ? path : join(this.folder, path));
     const id = newId(this.history.project.media.map((m) => m.id), "m");
-    const media: Media = { id, name: basename(path), path, linked, proxy: `proxy/${id}.mp4`, ...info };
-    const err = this.apply({ type: "addMedia", media, place: true });
+    const media: Media = { id, name: basename(path), path, linked, proxy: image ? path : `proxy/${id}.mp4`, ...(image ? { kind: "image" as const } : {}), ...info };
+    const err = this.apply({ type: "addMedia", media, place: place && !image });
     if (err) throw new Error(err);
     await this.jobs.ensure([media]);
     return media;
@@ -184,9 +186,9 @@ export class Session {
     this.codeTarget = { id: sk.id, version: nv };
     const dir = versionDir(sk.id, nv);
     const skill = { id: sk.id, version: nv, dir };
-    return ["Tulis mesin gaya edit", componentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
+    return ["Tulis mesin skill", componentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
   }
-  /** Ubah gaya edit = ubah kode komposisinya di versi baru (skill tanpa kode: ditulis dulu dengan permintaan itu). */
+  /** Ubah skill = ubah kode komposisinya di versi baru (skill tanpa kode: ditulis dulu dengan permintaan itu). */
   async prepareEdit(sk: { id: string; version: number }, text: string) {
     if (!hasComponent(sk.id, sk.version)) return this.prepareComponent(sk, text);
     const nv = await forkVersion(sk.id, sk.version);
@@ -195,7 +197,7 @@ export class Session {
     this.codeTarget = { id: sk.id, version: nv };
     const dir = versionDir(sk.id, nv);
     const skill = { id: sk.id, version: nv, dir };
-    return [`Ubah gaya edit (versi ${nv})`, editComponentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
+    return [`Ubah skill (versi ${nv})`, editComponentPrompt(dir, nv, await builtinSfxRoles(), text), { skill, addDirs: [dir] }] as [string, string, { skill: typeof skill; addDirs: string[] }];
   }
 
   review() { return getSettings().reviewClaude; }
@@ -260,7 +262,7 @@ export class Session {
     return ops;
   }
 
-  /** Rapikan otomatis setelah proyek dibuat (tanpa Claude; gaya edit dan penataan dipilih user dari editor): langkah berurutan, yang tidak bisa jalan dilewati dengan alasan. */
+  /** Rapikan otomatis setelah proyek dibuat (tanpa Claude; skill dan penataan dipilih user dari editor): langkah berurutan, yang tidak bisa jalan dilewati dengan alasan. */
   auto: { steps: AutoStep[]; running: boolean; startedAt: number } | null = null;
 
   async autoEdit() {

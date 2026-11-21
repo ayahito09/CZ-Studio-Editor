@@ -31,7 +31,7 @@ export function MediaPanel({ uploader }: { uploader: ReturnType<typeof useUpload
   const [showPath, setShowPath] = useState(false);
   const [path, setPath] = useState("");
   const [link, setLink] = useState(false);
-  const media = ed.project.media;
+  const media = ed.project.media.filter((m) => m.kind !== "image"); // foto slot elemen tidak tampil di daftar video
 
   const importPath = async (e: FormEvent) => {
     e.preventDefault();

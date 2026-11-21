@@ -14,11 +14,11 @@ Editor video lokal untuk konten vertikal (Reels, TikTok, Shorts), dipasang lewat
 - **Otomatis saat video masuk:** transkrip per kata (whisper.cpp), potong jeda, subtitle per kata, dan deteksi wajah.
 - **Timeline ala Premiere:** magnet, penanda, tanda masuk/keluar, gunting, geser isi klip, dan zoom linimasa.
 - **Rencana per bagian:** video dibagi per konteks, lengkap dengan gaya, catatan revisi, dan riwayat.
-- **Elemen bergerak:** kartu UI, judul kinetik, mockup chat, B-roll, badge, dan lainnya. Semuanya berupa kode yang bergerak, bukan gambar, dan bisa digeser langsung di pratinjau.
+- **Elemen bergerak:** elemen berupa kode yang bergerak (bukan gambar) dan bisa digeser langsung di pratinjau. Pustaka elemen bawaan tidak ikut paket publik; elemen datang dari skill yang Anda pasang.
 - **Kamera dan gerak:** setiap gerakan masuk, bertahan, lalu keluar. Bisa diatur manual, otomatis dari isi ucapan dan posisi wajah, atau lewat Claude.
 - **Area aman atas dan bawah:** pelindung teks berupa gradasi gelap, blur, atau kontras, dengan kekuatan dan tinggi yang bisa diatur.
 - **Teks dan elemen di belakang kepala:** orang di video menutupi elemen atau subtitle, memakai potongan subjek yang dibuat CZ.
-- **Gaya edit dari skill:** skill membawa komposisi, menu kustom, dan aset sendiri. Gaya apa pun bisa diterapkan ke semua bagian sekaligus.
+- **Skill:** skill membawa komposisi, menu kustom, dan aset sendiri. Gaya apa pun bisa diterapkan ke semua bagian sekaligus.
 - **Ekspor:** MP4 (H.264 atau H.265) dan MOV ProRes, beberapa rasio layar, motion blur, dan suara diratakan ke −14 LUFS.
 
 ## Yang wajib ada
@@ -54,6 +54,10 @@ cz install
 Perintah ini memasang ffmpeg dan ffprobe, whisper-cli beserta model transkrip, aset bawaan, mesin ekspor (Chrome Headless), mesin skrip Python dengan modelnya (wajah dan potongan subjek), dan Claude Code. Alat yang sudah ada dilewati, jadi aman dijalankan ulang.
 
 Jalankan langkah ini sendiri. npm versi terbaru memblokir skrip pemasangan secara bawaan, jadi `npm install -g cz-studio` bisa selesai tanpa memasang alat apa pun. Kalau terlewat, CZ juga menyiapkan alat yang kurang di latar saat pertama dibuka.
+
+Setelah selesai, `cz install` menampilkan ringkasan: apa yang sudah siap dan apa yang masih perlu Anda kerjakan sendiri (mis. memasang Python atau login Claude Code). Kalau Anda langsung menjalankan `cz` sebelum itu, CZ menampilkan langkah berikutnya yang sama di terminal.
+
+Transisi dan efek suara (SFX) terpasang otomatis di tiap sambungan footage tanpa Claude. Keduanya tampil sebagai penanda ◆ (transisi) dan ♪ (SFX) di track video; klik penandanya untuk mengganti atau mematikannya. SFX bawaan dibuat saat `cz install` (butuh ffmpeg).
 
 Dua langkah akan **bertanya dulu** sebelum mengubah komputermu: memasang Python lewat winget (bila belum ada) dan memasang Claude Code secara global lewat npm. Jawab `y` untuk setuju. Pemasangan otomatis lewat `npm install` tidak pernah menyetujuinya sendiri.
 
@@ -107,7 +111,7 @@ Bagi video per konteks, sendiri atau dengan Claude. Atur tampilan, teks, efek su
 
 ### 3. Sunting
 
-Pilih gaya edit, seret elemen ke pratinjau atau linimasa, lalu atur kamera, area aman, dan posisi elemen.
+Pilih skill, seret elemen ke pratinjau atau linimasa, lalu atur kamera, area aman, dan posisi elemen.
 
 ![Tahap Sunting: pustaka elemen, pratinjau, kamera dan gerak, serta linimasa](docs/images/sunting.jpg)
 

@@ -22,16 +22,28 @@ function EdgeLayer({ edge, side, H }: { edge: Edge; side: "top" | "bottom"; H: n
   return <>{layers}</>;
 }
 
-/** Satu lapisan per scene (hanya selama scene itu), di atas footage dan di bawah aset dan caption. */
+const hasOwn = (custom: unknown) => !!custom && typeof custom === "object" && "safe" in (custom as object);
+
+/** Satu lapisan per scene yang punya pengaturan sendiri, dan pelindung dasar proyek di sisa rentang (di luar scene tersebut),
+ *  di atas footage dan di bawah aset dan caption. */
 export function SafeEdgesLayer({ project }: { project: Project }) {
   const H = project.sequence.height;
+  const own = project.scenes.filter((s) => hasOwn(s.custom)).sort((a, b) => a.start - b.start);
+  const spans: { key: string; from: number; to: number; custom: unknown }[] = own.map((s) => ({ key: s.id, from: s.start, to: s.end, custom: s.custom }));
+  if (project.safe) {
+    let at = 0;
+    for (const s of [...own, { start: project.sequence.durationFrames, end: project.sequence.durationFrames }]) {
+      if (s.start > at) spans.push({ key: `base${at}`, from: at, to: s.start, custom: { safe: project.safe } });
+      at = Math.max(at, s.end);
+    }
+  }
   return (
     <>
-      {project.scenes.map((sc) => {
-        const e = safeEdgesOf(sc.custom);
+      {spans.map((sp) => {
+        const e = safeEdgesOf(sp.custom);
         if (e.top.mode === "mati" && e.bottom.mode === "mati") return null;
         return (
-          <Sequence key={sc.id} from={sc.start} durationInFrames={Math.max(1, sc.end - sc.start)} layout="none">
+          <Sequence key={sp.key} from={sp.from} durationInFrames={Math.max(1, sp.to - sp.from)} layout="none">
             <AbsoluteFill style={{ pointerEvents: "none" }}>
               <EdgeLayer edge={e.top} side="top" H={H} />
               <EdgeLayer edge={e.bottom} side="bottom" H={H} />

@@ -1,10 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  BUILTIN_ASSETS, buildCaptions, checkCuts, createProject, detectSilences, expandPreset, History, instantiate, missingAssets, SKILL_ASSET, skillAssetDef,
-  assetBox, cameraFromContent, controlValues, controlVisible, faceToSeq, fullScale, nextCustom, normalizeControls, keyWordIndex, placementIssues, placementY, skillSegments, suggestFillers, validateAssetDef, validateTemplate,
+  buildCaptions, checkCuts, createProject, detectSilences, expandPreset, History, instantiate, missingAssets, SKILL_ASSET, skillAssetDef,
+  assetBox, autoTransitions, EDGE_AUTO, setTransitionsAt, transSfxRole, cameraFromContent, controlValues, controlVisible, faceToSeq, fullScale, nextCustom, normalizeControls, keyWordIndex, placementIssues, placementY, skillSegments, suggestFillers, validateAssetDef, validateTemplate,
   type AssetDef, type Media, type Template,
 } from "../src/index.ts";
+
+// Katalog elemen bawaan tidak ada di paket publik (milik developer): tes memakai satu definisi contoh.
+const CHAT: AssetDef = {
+  id: "cz.chat", component: "cz.chat", name: "Mockup chat", category: "mockup", version: 1, tree: [], duration: 7,
+  params: { pesan: { type: "list", default: ["Saya: halo"], label: "Pesan" } }, layout: { x: 540, y: 960, w: 800, h: 600 },
+};
 
 const media = (id: string, duration = 10): Media => ({
   id, name: id + ".mp4", path: `media/${id}.mp4`, linked: false, proxy: `proxy/${id}.mp4`,
@@ -205,11 +211,7 @@ test("scene skill: divalidasi lalu dipecah per klip dengan kata relatif terhadap
 });
 
 test("aset kode: katalog bawaan sah, aset skill membaca isi dari defaultProps, instans dipasang lewat op", () => {
-  for (const d of BUILTIN_ASSETS) {
-    assert.deepEqual(validateAssetDef(d), [], d.id);
-    assert.equal(d.component, d.id);
-    assert.deepEqual(d.tree, []);
-  }
+  assert.deepEqual(validateAssetDef(CHAT), []);
   const sk = skillAssetDef("AsetKartuHarga", { judul: "Pro", harga: 99, poin: ["a", "b"], aksen: "#143BFF", tampil: true, data: { x: 1 } }, 90, 30, { width: 1080, height: 1920 });
   assert.equal(sk.id, "skill:AsetKartuHarga");
   assert.equal(sk.name, "Kartu Harga");
@@ -217,7 +219,7 @@ test("aset kode: katalog bawaan sah, aset skill membaca isi dari defaultProps, i
   assert.equal(sk.duration, 3);
   assert.ok(SKILL_ASSET.test("AsetChat") && !SKILL_ASSET.test("CleanScene"));
   const h = withWords();
-  const chat = BUILTIN_ASSETS.find((d) => d.id === "cz.chat")!;
+  const chat = CHAT;
   ok(h, { type: "addAssets", assets: [instantiate(chat, {}, { start: 0, fps: 30, seq: { width: 1080, height: 1920 } }, { params: { pesan: ["Saya: halo", "Claude: hai"] } })] });
   assert.equal(h.project.assets[0].defId, "cz.chat");
   assert.equal(h.project.assets[0].duration, 210);
@@ -251,6 +253,44 @@ test("kamera dasar proyek: bisa diatur tanpa rencana, tetap ada setelah rencana 
   assert.ok(h.apply({ type: "setCamera", camera: { moves: [{ at: 0, dur: 0 }] } }));
   ok(h, { type: "setCamera", camera: null });
   assert.equal(h.project.camera, null);
+});
+
+test("transisi + SFX otomatis: terpasang di sambungan footage, user bisa mengganti/mematikan, tidak ditimpa mesin", () => {
+  const h = new History(createProject("Uji", "p_t"));
+  ok(h, { type: "addMedia", media: media("m1", 20), place: true });
+  assert.deepEqual(h.project.transitions ?? [], []); // satu klip: belum ada sambungan
+  ok(h, { type: "split", frame: 150 });
+  ok(h, { type: "split", frame: 300 });
+  const t = h.project.transitions!;
+  assert.deepEqual(t.map((x) => [x.at, x.kind, !!x.auto]), [[150, "blur", true], [300, "whip", true]]); // 300 − 150 ≥ 2 dtk
+  // user mengganti jenis dan mematikan bunyi di 150: jadi milik user
+  ok(h, { type: "setTransitions", transitions: [{ at: 150, kind: "zoom", frames: 10, sfx: null }, ...t.slice(1)] });
+  ok(h, { type: "split", frame: 450 });
+  const u = h.project.transitions!.find((x) => x.at === 150)!;
+  assert.deepEqual([u.kind, u.sfx, !!u.auto], ["zoom", null, false]);
+  // aset bawaan CZ langsung dapat bunyi masuk
+  const chat = CHAT;
+  ok(h, { type: "addAssets", assets: [instantiate(chat, {}, { start: 0, fps: 30, seq: { width: 1080, height: 1920 } }, {})] });
+  assert.equal(h.project.assets[0].sfx.in, "ketik");
+  assert.equal(transSfxRole({ kind: "whip" }), "woosh-besar");
+  assert.equal(transSfxRole({ kind: "whip", sfx: null }), null);
+  assert.equal(transSfxRole({ kind: "cut" }), null);
+});
+
+test("area aman dan transisi dasar: bisa diatur tanpa rencana, divalidasi, dan mesin memilih transisi", () => {
+  const h = new History({ ...createProject("Uji", "p_t"), autoFx: false });
+  ok(h, { type: "addMedia", media: media("m1"), place: true });
+  ok(h, { type: "setSafe", safe: EDGE_AUTO });
+  assert.equal(h.project.safe?.top?.mode, "gelap+blur");
+  assert.ok(h.apply({ type: "setSafe", safe: "x" as never }));
+  ok(h, { type: "setTransitions", transitions: [{ at: 90, kind: "whip", frames: 10 }, { at: 30, kind: "blur", frames: 10 }] });
+  assert.deepEqual(h.project.transitions?.map((t) => t.at), [30, 90]);
+  assert.ok(h.apply({ type: "setTransitions", transitions: [{ at: 30, kind: "putar", frames: 10 } as never] }));
+  assert.ok(h.apply({ type: "setTransitions", transitions: [{ at: -1, kind: "blur", frames: 10 }] }));
+  // mesin: jenis bergilir, jarak ≥ 2 dtk, sambungan di frame 0 dilewati
+  const a = autoTransitions([0, 100, 130, 200, 400], 30);
+  assert.deepEqual(a.map((t) => [t.at, t.kind]), [[100, "blur"], [200, "whip"], [400, "blur"]]);
+  assert.deepEqual(setTransitionsAt(a, [200], "cut", 30).map((t) => [t.at, t.kind]), [[100, "blur"], [200, "cut"], [400, "blur"]]); // "Potong" tetap tercatat
 });
 
 test("caption: kata kunci = kata pertama bergaya, selain itu kata terpanjang", () => {

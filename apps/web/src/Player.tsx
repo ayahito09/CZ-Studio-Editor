@@ -24,7 +24,8 @@ export function PreviewPlayer() {
   const readyKey = project.media.filter((m) => PROXY_READY.has(s.jobs[m.id]?.stage)).map((m) => m.id).join(",");
   const src = useMemo(() => Object.fromEntries(readyKey.split(",").filter(Boolean).map((id) => [id, mediaUrl(id, "proxy")])), [readyKey]);
   const lib = useMemo(() => (ed.lib ? { template: ed.lib.template, assets: ed.lib.assets, base: ed.lib.base, component: ed.lib.component, media: ed.lib.media } : null), [ed.lib]);
-  const inputProps = useMemo(() => ({ project, src, lib, output: { width, height }, subjects: ed.subjects }), [project, src, lib, width, height, ed.subjects]);
+  const builtinSfx = useMemo(() => ({ base: "/api/builtin/", roles: ed.builtinSfx }), [ed.builtinSfx]);
+  const inputProps = useMemo(() => ({ project, src, lib, output: { width, height }, subjects: ed.subjects, builtinSfx, packs: ed.packs }), [project, src, lib, width, height, ed.subjects, builtinSfx, ed.packs]);
 
   useEffect(() => {
     const p = ed.player.current;

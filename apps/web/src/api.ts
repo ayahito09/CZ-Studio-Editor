@@ -1,4 +1,5 @@
 import type { AssetDef, Op, Project, SkillControlGroup, Template } from "@cz/core";
+import type { PackInfo } from "@cz/composition";
 
 export type Stage = "menunggu" | "proxy" | "thumbnail" | "waveform" | "siap" | "gagal";
 export interface JobStatus { stage: Stage; progress: number; error?: string }
@@ -96,6 +97,8 @@ export const api = {
   autoCamera: (ids?: string[]) => post("scenes/auto-camera", { ids }),
   autoBaseCamera: (ranges: [number, number][]) => post("camera/auto", { ranges }),
   subjects: () => get<{ subjects: Record<string, string>; busy: string[] }>("subjects"),
+  builtinSfx: () => get<{ roles: string[] }>("builtin/sfx"),
+  packs: () => get<PackInfo[]>("packs"),
   makeSubject: (mediaId: string) => postAny<{ ok: boolean }>(`media/${mediaId}/subject/make`, {}),
   forget: (folder: string) => post("recent/forget", { folder }),
   close: () => post("close"),
@@ -141,16 +144,17 @@ export const api = {
 };
 
 /** Upload satu file dengan progres (fetch belum memberi progres upload). */
-export function upload(file: File, onProgress: (p: number) => void): Promise<State> {
+/** slot=true: masuk pustaka media untuk slot elemen (tidak ditaruh di timeline); balasan memuat mediaId. */
+export function upload(file: File, onProgress: (p: number) => void, slot = false): Promise<State & { mediaId?: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", "/api/media/upload?name=" + encodeURIComponent(file.name));
+    xhr.open("PUT", "/api/media/upload?name=" + encodeURIComponent(file.name) + (slot ? "&slot=1" : ""));
     xhr.setRequestHeader("content-type", "application/octet-stream");
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
     xhr.onload = () => {
       let data: { error?: string } = {};
       try { data = JSON.parse(xhr.responseText); } catch { /* balasan bukan JSON */ }
-      xhr.status < 300 ? resolve(data as State) : reject(new Error(data.error ?? `Upload gagal (${xhr.status})`));
+      xhr.status < 300 ? resolve(data as State & { mediaId?: string }) : reject(new Error(data.error ?? `Upload gagal (${xhr.status})`));
     };
     xhr.onerror = () => reject(new Error("Koneksi ke server CZ terputus"));
     xhr.send(file);
@@ -165,7 +169,7 @@ export async function uploadNoteImage(file: File): Promise<string> {
 export const mediaUrl = (id: string, kind: "proxy" | "thumbs" | "peaks") => `/api/media/${id}/${kind}`;
 export const noteImageUrl = (p: string) => `/api/notes/image?p=${encodeURIComponent(p)}`;
 
-/** Unggah isi folder (atau satu .zip) gaya edit hasil seret-lepas, lalu pasang. */
+/** Unggah isi folder (atau satu .zip) skill hasil seret-lepas, lalu pasang. */
 export async function uploadSkill(files: { path: string; file: File }[], onProgress: (done: number, total: number) => void) {
   const batch = (Math.random().toString(36).slice(2, 10) + Date.now().toString(36)).slice(0, 24);
   for (let i = 0; i < files.length; i++) {

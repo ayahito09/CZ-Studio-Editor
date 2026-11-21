@@ -54,7 +54,7 @@ export const config = {
   self: [process.execPath, fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./cli.ts" : "./cli.js", import.meta.url))] as string[],
 };
 
-export const LIBRARY = { skills: "Skills", assets: "Aset", projects: "Proyek" } as const;
+export const LIBRARY = { skills: "Skills", assets: "Aset", projects: "Proyek", packs: "Paket" } as const;
 export const libraryPath = (kind: keyof typeof LIBRARY) => join(config.libraryDir, LIBRARY[kind]);
 
 /** Skill dan aset bawaan dari versi lama (<dataDir>/skills, /builtin) dipindah ke pustaka di Videos\CZ Studio, per folder:

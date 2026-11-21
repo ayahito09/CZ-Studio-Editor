@@ -37,7 +37,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </label>
             ))}
           </fieldset>
-          <p className="hint">Dipakai untuk semua tugas Claude: gaya edit, tata otomatis, dan permintaanmu. Berlaku mulai tugas berikutnya. Effort lebih tinggi lebih teliti tetapi memakai lebih banyak kuota Claude-mu.</p>
+          <p className="hint">Dipakai untuk semua tugas Claude: skill, tata otomatis, dan permintaanmu. Berlaku mulai tugas berikutnya. Effort lebih tinggi lebih teliti tetapi memakai lebih banyak kuota Claude-mu.</p>
           <label className="settings__row">
             <span>
               <b>Tinjau dulu perubahan Claude</b>

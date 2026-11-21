@@ -189,7 +189,7 @@ const TOOL_LABEL: Record<string, string> = {
   cz_get_project: "Membaca proyek", cz_get_timeline: "Membaca linimasa", cz_get_transcript: "Membaca transkrip", cz_get_frame: "Melihat gambar dari video",
   cz_propose_cuts: "Mengusulkan potongan", cz_apply_cuts: "Memotong video", cz_set_scenes: "Menyusun rencana", cz_update_scene: "Mengubah bagian",
   cz_list_assets: "Melihat pilihan elemen", cz_get_media_frames: "Melihat isi video B-roll", cz_add_asset: "Memasang elemen bergerak", cz_update_asset: "Mengubah elemen", cz_remove_asset: "Menghapus elemen", cz_set_scene_skill: "Menggambar bagian",
-  cz_write_skill_file: "Menulis mesin gaya edit", cz_build_skill_component: "Menyusun mesin gaya edit", cz_run_skill_script: "Menjalankan alat gaya edit",
+  cz_write_skill_file: "Menulis mesin skill", cz_build_skill_component: "Menyusun mesin skill", cz_run_skill_script: "Menjalankan alat skill",
   cz_set_caption: "Mengatur subtitle", cz_reply_note: "Membalas catatan",
   cz_add_note: "Menambah catatan", cz_set_note_status: "Menandai catatan", cz_render: "Memulai ekspor", cz_set_status: "Melaporkan kemajuan",
   Read: "Membaca panduan gaya", Glob: "Membaca panduan gaya", Grep: "Membaca panduan gaya",

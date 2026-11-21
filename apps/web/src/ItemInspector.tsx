@@ -1,6 +1,6 @@
 import { BehindHead } from "./BehindHead.tsx";
-import { useEffect, useState } from "react";
-import { BUILTIN_ASSETS, CAPTION_LAYOUTS, fullScale, instantiate, KEY_ACCENTS, paramValues, placementY, type Placement, type AssetDef, type AssetInstance, type Caption, type CaptionStyle, type Op, type ParamDef, type WordStyle } from "@cz/core";
+import { useEffect, useRef, useState } from "react";
+import { CAPTION_LAYOUTS, fullScale, instantiate, KEY_ACCENTS, paramValues, placementY, type Placement, type AssetDef, type AssetInstance, type Caption, type CaptionStyle, type Op, type ParamDef, type WordStyle } from "@cz/core";
 import { ANIM_PRESETS, AnimPreview, CaptionPreview, transformAt } from "@cz/composition";
 
 /** Nama gerakan untuk user. */
@@ -27,6 +27,7 @@ const PARAM_LABEL: Record<string, string> = {
   name: "Nama", messages: "Pesan", caption: "Keterangan", url: "Alamat",
 };
 const paramLabel = (name: string, def: ParamDef) => def.label ?? PARAM_LABEL[name] ?? name.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
+import { mediaUrl, upload } from "./api.ts";
 import { useEd } from "./ed.ts";
 import { EffectPicker, miniPlayer, type Choice } from "./EffectPicker.tsx";
 import { Icon } from "./icons.tsx";
@@ -84,15 +85,39 @@ function ParamField({ name, def, value, onChange }: { name: string; def: ParamDe
   }
 }
 
-/** Pilih video proyek (untuk B-roll). */
+/** Slot foto/video elemen: unggah file baru (masuk pustaka media, tidak ke timeline), pilih yang sudah ada, atau kosongkan (kembali ke gambar contoh). */
 function MediaField({ label, value, onChange }: { label: string; value: string; onChange: (v: unknown) => void }) {
   const ed = useEd();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const cur = ed.project.media.find((m) => m.id === value);
+  const pick = async (file: File) => {
+    setBusy(true);
+    let id: string | undefined;
+    const ok = await ed.run(async () => { const r = await upload(file, () => {}, true); id = r.mediaId; return r; });
+    setBusy(false);
+    if (ok && id) onChange(id);
+  };
   return (
-    <label className="field field--inline"><span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Pilih video</option>
-        {ed.project.media.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-      </select></label>
+    <div className="field mslot">
+      <span>{label}</span>
+      <div className="mslot__row">
+        <span className="mslot__thumb" aria-hidden="true">
+          {cur ? (cur.kind === "image" ? <img src={mediaUrl(cur.id, "proxy")} alt="" /> : <video src={mediaUrl(cur.id, "proxy")} muted preload="metadata" />) : <span>contoh</span>}
+        </span>
+        <div className="mslot__acts">
+          <button type="button" className="btn btn--sm-text" disabled={busy} onClick={() => input.current?.click()}>{busy ? "Mengunggah…" : cur ? "Ganti" : "Unggah foto/video"}</button>
+          {cur && <button type="button" className="btn btn--sm-text" onClick={() => onChange("")}>Kosongkan</button>}
+        </div>
+        <input ref={input} type="file" accept="image/*,video/*" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void pick(f); }} />
+      </div>
+      {ed.project.media.length > 0 && (
+        <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={`${label}: pilih dari proyek`}>
+          <option value="">Pilih dari proyek…</option>
+          {ed.project.media.map((m) => <option key={m.id} value={m.id}>{m.kind === "image" ? "Foto" : "Video"}: {m.name}</option>)}
+        </select>
+      )}
+    </div>
   );
 }
 
@@ -110,7 +135,7 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
 
   return (
     <>
-      <h2 id="insp-h" className="panel__title">{def?.name ?? (a.defId ? "Elemen ini sudah tidak ada di gaya edit" : "Teks bebas")}</h2>
+      <h2 id="insp-h" className="panel__title">{def?.name ?? (a.defId ? "Elemen ini sudah tidak ada di skill" : "Teks bebas")}</h2>
       <BehindHead start={a.start} end={a.start + a.duration} on={a.params.behindHead === true} locked={a.locked}
         onChange={(v) => set({ params: { ...a.params, behindHead: v || undefined } })} />
       <div className="row row--wrap">
@@ -119,8 +144,8 @@ export function AssetInspector({ a }: { a: AssetInstance }) {
         <button className={"btn btn--chip" + (a.hidden ? " is-on" : "")} aria-pressed={a.hidden} onClick={() => set({ hidden: !a.hidden })}>
           <Icon name={a.hidden ? "eyeOff" : "eye"} />{a.hidden ? "Tersembunyi" : "Sembunyikan"}</button>
         {def && (a.detached
-          ? <button className="btn btn--chip" onClick={() => set({ detached: false })} title="Ikutkan lagi saat gaya edit diubah">Tidak ikut gaya</button>
-          : <button className="btn btn--chip is-on" onClick={() => set({ detached: true, params })} title="Klik supaya elemen ini tidak berubah saat gaya edit diubah">Ikut gaya</button>)}
+          ? <button className="btn btn--chip" onClick={() => set({ detached: false })} title="Ikutkan lagi saat skill diubah">Tidak ikut skill</button>
+          : <button className="btn btn--chip is-on" onClick={() => set({ detached: true, params })} title="Klik supaya elemen ini tidak berubah saat skill diubah">Ikut skill</button>)}
       </div>
 
       <div className="group">
@@ -215,13 +240,14 @@ function QuickPlace({ a, def }: { a: AssetInstance; def: AssetDef | undefined })
   const set = (transform: Partial<AssetInstance["transform"]>) => ed.op({ type: "updateAsset", id: a.id, changes: { transform } } as Op);
   const y = (w: Placement, scale = a.transform.scale) => placementY(w, boxH, scale, seq.height);
   const at = (["atas", "tengah", "bawah"] as const).find((w) => Math.abs(a.transform.y - y(w)) < 4 && Math.abs(a.transform.x - seq.width / 2) < 4);
-  const latarDef = BUILTIN_ASSETS.find((d) => d.id === "cz.latar")!;
+  const latarDef = ed.assetDefs.find((d) => d.id === "cz.latar"); // dari paket elemen lokal; tanpa paket tombol latar tidak tampil
   const behind = ed.project.assets.some((x) => x.defId === "cz.latar" && x.start <= a.start && x.start + x.duration >= a.start + a.duration);
   const boxW = typeof def?.layout.w === "number" ? def.layout.w : 900;
   const full = fullScale(boxW, boxH, seq);
   const isFull = Math.abs(a.transform.scale - full) < 0.01 && Math.abs(a.transform.y - seq.height / 2) < 4;
   // latar disisipkan di bawah elemen: elemen dipasang ulang sesudah latar (urutan aset = urutan lapisan)
   const withBackdrop = (label: string, gaya: string, scale: number) => {
+    if (!latarDef) return;
     const bg = instantiate(latarDef, {}, { start: a.start, fps: seq.fps, seq }, { duration: a.duration, params: { gaya } });
     ed.op({ type: "batch", label, ops: [
       { type: "removeAssets", ids: [a.id] },
@@ -238,8 +264,8 @@ function QuickPlace({ a, def }: { a: AssetInstance; def: AssetDef | undefined })
         {(["atas", "tengah", "bawah"] as const).map((w) => (
           <button key={w} className={"seg__btn" + (at === w ? " is-on" : "")} disabled={a.locked} onClick={() => set({ x: seq.width / 2, y: y(w) })}>{w[0].toUpperCase() + w.slice(1)}</button>
         ))}
-        <button className={"seg__btn" + (behind && !isFull ? " is-on" : "")} disabled={a.locked || behind} onClick={broll} title="Taruh di tengah dengan latar putih bergrid di belakangnya">B-roll</button>
-        <button className={"seg__btn" + (isFull ? " is-on" : "")} disabled={a.locked || isFull} onClick={fullscreen} title="Besarkan sampai memenuhi layar, dengan latar biru di belakangnya (latar bisa diganti di elemen Latar layar penuh)">Layar penuh</button>
+        {latarDef && <button className={"seg__btn" + (behind && !isFull ? " is-on" : "")} disabled={a.locked || behind} onClick={broll} title="Taruh di tengah dengan latar putih bergrid di belakangnya">B-roll</button>}
+        {latarDef && <button className={"seg__btn" + (isFull ? " is-on" : "")} disabled={a.locked || isFull} onClick={fullscreen} title="Besarkan sampai memenuhi layar, dengan latar biru di belakangnya (latar bisa diganti di elemen Latar layar penuh)">Layar penuh</button>}
       </div>
       <span className="group__label">Ukuran</span>
       <div className="seg">

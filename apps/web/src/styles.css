@@ -1563,3 +1563,22 @@ details.missing li .mono { overflow: hidden; text-overflow: ellipsis; white-spac
 .segs--wrap .segs__btn { flex: 1 1 auto; }
 .safeside .field b { float: right; color: var(--accent); font-weight: 500; }
 .behind { padding: 6px 0 2px; } .behind .hint { margin: 6px 0 0; display: flex; gap: 6px; align-items: center; }
+
+/* Penanda transisi dan SFX di sambungan footage (timeline V1): ◆ transisi, ♪ efek suara. Redup = dipasang mesin CZ, terang = pilihan user. */
+.fxmark {
+  position: absolute; z-index: 6; width: 16px; height: 16px; margin-left: -8px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; font-size: 9px; line-height: 1; cursor: pointer; color: #101010; background: var(--accent);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .5); transition: transform 0.12s var(--ease);
+}
+.fxmark--trans { top: 3px; }
+.fxmark--sfx { bottom: 3px; background: #8fb8ff; font-size: 10px; }
+.fxmark.is-auto { opacity: .6; }
+.fxmark:hover { transform: scale(1.18); opacity: 1; }
+.fxmark.is-selected { opacity: 1; box-shadow: 0 0 0 2px #fff; }
+
+/* Slot foto/video elemen (Inspector): kotak kecil + Unggah/Ganti/Kosongkan. */
+.mslot { display: grid; gap: 6px; }
+.mslot__row { display: flex; align-items: center; gap: 10px; }
+.mslot__thumb { width: 54px; height: 54px; flex: none; border-radius: 10px; overflow: hidden; background: #1b2230; display: grid; place-items: center; font-size: 10px; color: var(--ink-2, #9aa3b2); border: 1px solid rgb(255 255 255 / .08); }
+.mslot__thumb img, .mslot__thumb video { width: 100%; height: 100%; object-fit: cover; }
+.mslot__acts { display: flex; flex-wrap: wrap; gap: 6px; }

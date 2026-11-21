@@ -40,7 +40,7 @@
     "dev": "node scripts/dev.mjs",
     "test": "node --test packages/core/test/",
     "typecheck": "tsc -p tsconfig.json",
-    "build": "vite build apps/web && esbuild apps/server/src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --external:fastify --external:@fastify/static --external:immer --external:@remotion/renderer --external:@remotion/bundler --external:esbuild && node scripts/bundle-render.mjs && node -e \"require('node:fs').cpSync('apps/server/builtin','dist/builtin',{recursive:true})\"",
+    "build": "vite build apps/web && esbuild apps/server/src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --external:fastify --external:@fastify/static --external:immer --external:@remotion/renderer --external:@remotion/bundler --external:esbuild && node scripts/bundle-render.mjs",
     "prepublishOnly": "npm test && npm run typecheck && npm run build",
     "postinstall": "node dist/cli.js setup || exit 0"
   },

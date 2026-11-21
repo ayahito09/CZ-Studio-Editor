@@ -1,11 +1,15 @@
 // Render memakai komposisi Remotion yang sama dengan Player, jadi file akhir = yang terlihat di editor.
 import { existsSync } from "node:fs";
+import { cpus, freemem } from "node:os";
+import type { OpenGlRenderer } from "@remotion/renderer";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyOp, type Project } from "@cz/core";
 import { config } from "./config.ts";
 import { mediaFile, renderSource, run, safeName } from "./media.ts";
+import { builtinSfxRoles } from "./builtin.ts";
+import { listPacks } from "./packs.ts";
 import { subjectFile } from "./faces.ts";
 import { compositionLib, type Library } from "./skills.ts";
 
@@ -17,12 +21,28 @@ export interface RenderSettings {
   codec: "h264" | "h265" | "prores";
   crf: number;
   normalize: boolean;
+  /** Mode cepat: penyandian GPU bila ada (bitrate tetap, bukan CRF). Kualitas sedikit di bawah x264, cocok untuk draft. */
+  fast?: boolean;
   /** Sampel motion blur shutter per frame bergerak (0 = mati). Bawaan MOTION_BLUR. */
   motionBlur?: number;
   range: "all" | "inout" | "scene";
   inFrame?: number; outFrame?: number; sceneId?: string;
   outDir?: string;
 }
+/** Konkurensi render: ±75% core, dibatasi RAM kosong (±1,2 GB per tab Chrome). CZ_RENDER_CONCURRENCY=n menggantinya. */
+export function renderConcurrency(): number {
+  const env = Number(process.env.CZ_RENDER_CONCURRENCY);
+  if (Number.isInteger(env) && env >= 1) return env;
+  return Math.max(1, Math.min(Math.floor(cpus().length * 0.75), Math.floor(freemem() / 1.2e9)));
+}
+/** Mode GL Chrome: ANGLE (Direct3D) di Windows lebih cepat untuk blur dan transform, hasil piksel sama. CZ_RENDER_GL=default mematikannya. */
+export function renderGl(): OpenGlRenderer | null {
+  const e = process.env.CZ_RENDER_GL;
+  if (e === "default") return null;
+  if (e) return e as OpenGlRenderer;
+  return process.platform === "win32" ? "angle" : null;
+}
+
 /** Motion blur wajib di render final: 5 sampel shutter 180° hanya di frame yang bergerak. */
 export const MOTION_BLUR = 5;
 export type RenderState = "antre" | "menyiapkan" | "render" | "audio" | "selesai" | "gagal" | "batal";
@@ -51,12 +71,14 @@ export const fileUrl = (path: string) => { renderFiles.add(path); return `${base
 
 /** Props komposisi untuk render: file asli (atau proxy untuk frame cepat) lewat server lokal ini. */
 export async function renderProps(folder: string, project: Project, lib: Library | null, useProxy: boolean, out?: { width: number; height: number }, files?: Record<string, string>) {
-  const src = Object.fromEntries(project.media.map((m) => [m.id, fileUrl(useProxy ? join(folder, m.proxy) : files?.[m.id] ?? mediaFile(folder, m))]));
+  const src = Object.fromEntries(project.media.map((m) => [m.id, fileUrl(useProxy && m.kind !== "image" ? join(folder, m.proxy) : files?.[m.id] ?? mediaFile(folder, m))]));
   return {
     project, src,
     lib: lib ? await compositionLib(lib, `${base()}/api/skills/${lib.id}/${lib.version}/file/`, folder, project.media.map((m) => m.id), (_id, p) => fileUrl(p)) : null,
     output: out ?? { width: project.sequence.width, height: project.sequence.height },
     subjects: Object.fromEntries(project.media.filter((m) => existsSync(subjectFile(folder, m.id))).map((m) => [m.id, fileUrl(subjectFile(folder, m.id))])),
+    builtinSfx: { base: `${base()}/api/builtin/`, roles: await builtinSfxRoles() },
+    packs: (await listPacks()).map((p) => ({ ...p, url: `${base()}/api/packs/${p.id}/pack.js` })),
   };
 }
 
@@ -171,7 +193,8 @@ export class RenderQueue {
       if ((job.state as RenderState) === "batal") return;
     }
     const inputProps = { ...(await renderProps(job.folder, project, snap.lib, false, { width: s.width, height: s.height }, files)), motionBlur: s.motionBlur ?? MOTION_BLUR };
-    const composition = await r.selectComposition({ serveUrl: url, id: "cz", inputProps });
+    const gl = renderGl();
+    const composition = await r.selectComposition({ serveUrl: url, id: "cz", inputProps, ...(gl ? { chromiumOptions: { gl } } : {}) });
     const ext = s.codec === "prores" ? "mov" : "mp4";
     const dir = s.outDir ?? join(job.folder, "render");
     await mkdir(dir, { recursive: true });
@@ -187,15 +210,32 @@ export class RenderQueue {
     this.cancel = cancel;
     job.state = "render"; job.note = undefined;
     const t0 = Date.now();
-    await r.renderMedia({
-      serveUrl: url, composition, inputProps, outputLocation: raw, cancelSignal,
-      codec: s.codec, ...(s.codec === "prores" ? { proResProfile: "standard" as const } : { crf: s.crf }),
+    const concurrency = renderConcurrency();
+    const bitrate = `${Math.max(4, Math.round((s.width * s.height * s.fps * 0.15) / 1e6))}M`;
+    const go = (glMode: OpenGlRenderer | null) => r.renderMedia({
+      serveUrl: url, composition, inputProps, outputLocation: raw, cancelSignal, concurrency,
+      ...(glMode ? { chromiumOptions: { gl: glMode } } : {}),
+      // Bawaan Remotion 30 dtk per pengambilan frame video; footage 1080p 60 fps di komputer yang sibuk bisa lebih lama dari itu.
+      timeoutInMilliseconds: 180_000,
+      codec: s.codec,
+      // Final: CRF dengan preset fast (kualitas setara medium pada CRF sama, lebih cepat). Cepat: GPU bila ada, bitrate tetap.
+      ...(s.codec === "prores" ? { proResProfile: "standard" as const }
+        : s.fast ? { hardwareAcceleration: "if-possible" as const, videoBitrate: bitrate }
+        : { crf: s.crf, ...(s.codec === "h264" ? { x264Preset: "fast" as const } : {}) }),
       frameRange: [from, to], audioCodec: s.codec === "prores" ? "pcm-16" : "aac", audioBitrate: "192k",
       onProgress: (p) => {
         job.progress = p.progress; job.frames = p.renderedFrames;
         job.eta = p.progress > 0.02 ? Math.round(((Date.now() - t0) / p.progress) * (1 - p.progress) / 1000) : null;
       },
     });
+    try {
+      await go(gl);
+    } catch (e) {
+      // Driver GPU yang tidak cocok dengan ANGLE: ulangi sekali dengan mode GL bawaan Chrome (bukan karena dibatalkan user).
+      if (!gl || (job.state as RenderState) === "batal" || !/gl|angle|gpu|webgl|graphics|context lost|target closed|crash/i.test(String((e as Error)?.message))) throw e;
+      job.note = "Mode GPU bermasalah, mengulang dengan mode standar";
+      await go(null);
+    }
     if ((job.state as RenderState) === "batal") { await rm(raw, { force: true }); return; }
     if (s.normalize) {
       // Suara −14 LUFS, true peak −1 dBTP (loudnorm sudah membatasi puncak); video disalin apa adanya.

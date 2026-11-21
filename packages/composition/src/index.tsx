@@ -9,10 +9,10 @@ import { HeadCutout } from "./HeadCutout.tsx";
 import { SkillScenes, skillAssetDefs, skillCovered, useSkillRegistry, type Registry, type SkillComponent, type SkillMediaData } from "./skill.tsx";
 import { EASE_PRO, MotionBlur, Move, clamp01, curve, sample, tempo, type K } from "./motion/index.ts";
 import { Camera, TransitionLayer, TransitionSfx, assetKeys, staggerStyle, useMotionMask, wipeClip, wordPose } from "./native.tsx";
-import { BUILTIN_COMPONENTS, type AssetProps } from "./assets.tsx";
-import { CLEAN_COMPONENTS } from "./assetsClean.tsx";
+import type { AssetProps } from "./assetProps.ts";
+import { packComponent, usePacksLoaded, type PackInfo } from "./packs.tsx";
 import {
-  BUILTIN_ASSETS, clipLen, keyWordIndex, paramValues, resolveValue, wordFrames,
+  clipLen, keyWordIndex, paramValues, resolveValue, wordFrames,
   type AssetDef, type AssetInstance, type Caption, type CaptionStyle, type Clip, type Element, type Project, type Template, type TextStyle,
 } from "@cz/core";
 
@@ -32,8 +32,19 @@ export interface CompositionProps {
   motionBlur?: number;
   /** Video subjek ber-alpha per media (mesin matte CZ), untuk elemen dan teks "di belakang kepala". */
   subjects?: Record<string, string>;
+  /** SFX bawaan CZ (tanpa skill): alamat dasar folder bawaan dan peran yang berkasnya ada (`<base>sfx/<peran>.wav`). */
+  builtinSfx?: { base: string; roles: string[] };
+  /** Paket elemen lokal (milik developer): katalog + alamat modul komponennya. */
+  packs?: PackInfo[];
   [key: string]: unknown;
 }
+
+/** Alamat berkas SFX suatu peran: dari peta skill bila ada, kalau tidak dari SFX bawaan CZ; null = tidak ada berkasnya. */
+const sfxUrlOf = (lib: Library | null, builtin: CompositionProps["builtinSfx"]) => (role: string): string | null => {
+  const f = lib?.template?.sfx?.[role];
+  if (f && lib) return lib.base + f;
+  return builtin?.roles.includes(role) ? `${builtin.base}sfx/${role}.wav` : null;
+};
 
 /** Font bawaan yang ada di Windows (Player dan Chrome headless), supaya pratinjau = render. */
 const FONT = `"Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif`;
@@ -61,7 +72,9 @@ function volumeAt(c: Clip, len: number, duck: Uint8Array | null) {
   };
 }
 
-export function CzComposition({ project, src, lib, output, motionBlur, subjects }: CompositionProps) {
+export function CzComposition({ project, src, lib, output, motionBlur, subjects, builtinSfx, packs }: CompositionProps) {
+  usePacksLoaded(packs);
+  const urlOf = sfxUrlOf(lib, builtinSfx);
   const fps = project.sequence.fps;
   const { width: W, height: H } = project.sequence;
   const out = output ?? { width: W, height: H };
@@ -78,13 +91,14 @@ export function CzComposition({ project, src, lib, output, motionBlur, subjects 
   // Definisi aset: bawaan CZ (kode) + komposisi "Aset…" skill (kode) + aset lama skill (pohon JSON, hanya dibaca).
   const needSkillAssets = !!lib?.component && project.assets.some((a) => a.defId?.startsWith("skill:"));
   const { reg } = useSkillRegistry(lib?.component ?? null, needSkillAssets);
-  const defs = useMemo(() => new Map([...BUILTIN_ASSETS, ...skillAssetDefs(reg, project.sequence), ...(lib?.assets ?? [])].map((d) => [d.id, d])), [lib, reg, project.sequence]);
+  const defs = useMemo(() => new Map([...(packs ?? []).flatMap((p) => p.assets), ...skillAssetDefs(reg, project.sequence), ...(lib?.assets ?? [])].map((d) => [d.id, d])), [lib, reg, project.sequence, packs]);
   // Kata per frame sequence, untuk aset kode yang mengikuti ucapan (mis. teks diketik saat diucapkan).
   const spoken = useMemo(() => {
     const fr = wordFrames(project);
     return project.transcript.words.flatMap((w) => { const f = fr.get(w.id); return f ? [{ text: w.text, start: f.start, end: f.end }] : []; }).sort((a, b) => a.start - b.start);
   }, [project.transcript, project.clips, project.sequence]);
   const Vid = rendering() ? OffthreadVideo : Html5Video;
+  const kinds = useMemo(() => Object.fromEntries(project.media.map((m) => [m.id, m.kind ?? "video"])), [project.media]);
   const covered = useMemo(() => skillCovered(project), [project.scenes, project.clips, project.tracks, project.sequence]);
   const frame = useCurrentFrame();
   const bySkill = !!lib?.component && covered(frame);
@@ -124,7 +138,7 @@ export function CzComposition({ project, src, lib, output, motionBlur, subjects 
         {/* Elemen dan teks "di belakang kepala": digambar sebelum potongan subjek, jadi kepala menutupinya. */}
         {project.assets.filter((a) => !a.hidden && !hiddenTracks.has(a.trackId) && a.params.behindHead === true).map((a) => (
           <Sequence key={a.id} from={a.start} durationInFrames={Math.max(1, a.duration)} layout="none">
-            <AssetView a={a} def={a.defId ? defs.get(a.defId) : undefined} lib={lib} reg={reg} src={src}
+            <AssetView a={a} def={a.defId ? defs.get(a.defId) : undefined} lib={lib} reg={reg} src={src} kinds={kinds}
               words={spoken.filter((w) => w.start >= a.start && w.start < a.start + a.duration).map((w) => ({ w: w.text, s: (w.start - a.start) / fps, e: (w.end - a.start) / fps }))} />
           </Sequence>
         ))}
@@ -137,7 +151,7 @@ export function CzComposition({ project, src, lib, output, motionBlur, subjects 
         {/* Aset digambar sesuai urutan daftar (Ctrl+[ / ] mengubah urutan). */}
         {project.assets.filter((a) => !a.hidden && !hiddenTracks.has(a.trackId) && a.params.behindHead !== true).map((a) => (
           <Sequence key={a.id} from={a.start} durationInFrames={Math.max(1, a.duration)} layout="none">
-            <AssetView a={a} def={a.defId ? defs.get(a.defId) : undefined} lib={lib} reg={reg} src={src}
+            <AssetView a={a} def={a.defId ? defs.get(a.defId) : undefined} lib={lib} reg={reg} src={src} kinds={kinds}
               words={spoken.filter((w) => w.start >= a.start && w.start < a.start + a.duration).map((w) => ({ w: w.text, s: (w.start - a.start) / fps, e: (w.end - a.start) / fps }))} />
           </Sequence>
         ))}
@@ -149,7 +163,7 @@ export function CzComposition({ project, src, lib, output, motionBlur, subjects 
         </TransitionLayer>
       </div>
       </MotionBlur>
-      <TransitionSfx project={project} base={lib?.base ?? null} />
+      <TransitionSfx project={project} urlOf={urlOf} />
       {audio.flatMap((t) => on(t.id).map((c) => {
         const len = clipLen(c, fps);
         const duck = t.id === "A1" ? null : speech;
@@ -159,27 +173,26 @@ export function CzComposition({ project, src, lib, output, motionBlur, subjects 
           </Sequence>
         );
       }))}
-      <AssetSfx project={project} lib={lib} defs={defs} speech={speech} />
+      <AssetSfx project={project} urlOf={urlOf} defs={defs} speech={speech} />
     </AbsoluteFill>
   );
 }
 
-function AssetSfx({ project, lib, defs, speech }: { project: Project; lib: Library | null; defs: Map<string, AssetDef>; speech: Uint8Array }) {
-  const map = lib?.template?.sfx;
+function AssetSfx({ project, urlOf, defs, speech }: { project: Project; urlOf: (role: string) => string | null; defs: Map<string, AssetDef>; speech: Uint8Array }) {
   const sfxTrack = project.tracks.find((t) => t.id === "A2");
-  if (!map || !lib || sfxTrack?.muted) return null;
+  if (sfxTrack?.muted) return null;
   const fps = project.sequence.fps;
   const items: ReactNode[] = [];
   for (const a of project.assets) {
     if (a.hidden) continue;
     const outFrames = (a.defId ? defs.get(a.defId)?.out?.frames : undefined) ?? 10;
     for (const [when, role] of [["in", a.sfx.in], ["out", a.sfx.out]] as const) {
-      const file = role ? map[role] : undefined;
-      if (!file) continue;
+      const url = role ? urlOf(role) : null;
+      if (!url) continue;
       const from = when === "in" ? a.start : Math.max(a.start, a.start + a.duration - outFrames);
       items.push(
         <Sequence key={a.id + when} from={from} durationInFrames={fps * 3} layout="none">
-          <Html5Audio src={lib.base + file} volume={(f) => Math.min(1, a.sfx.volume) * (speech[from + Math.round(f)] ? DUCK : 1)} />
+          <Html5Audio src={url} volume={(f) => Math.min(1, a.sfx.volume) * (speech[from + Math.round(f)] ? DUCK : 1)} />
         </Sequence>,
       );
     }
@@ -224,15 +237,15 @@ const ANCHOR: Record<string, [string, string]> = {
 /** Aset kode: komponen bawaan CZ atau komposisi "Aset…" skill, digerakkan mesin cz-motion dari dalam komponennya. */
 function codeAsset(def: AssetDef | undefined, reg: Registry | null): ((p: AssetProps) => ReactNode) | null {
   if (!def?.component) return null;
-  const B = BUILTIN_COMPONENTS[def.component] ?? CLEAN_COMPONENTS[def.component];
+  const B = packComponent(def.component);
   if (B) return (p) => <B {...p} />;
   const e = def.component.startsWith("skill:") ? reg?.[def.component.slice(6)] : undefined;
   // Komposisi skill menerima isi sebagai props biasa (sama seperti defaultProps-nya) + ukuran, durasi, dan kata.
-  return e ? (p) => <e.C {...e.defaultProps} {...p.params} durationInFrames={p.durationInFrames} fps={p.fps} width={p.width} height={p.height} words={p.words} mediaSrc={p.mediaSrc} /> : null;
+  return e ? (p) => <e.C {...e.defaultProps} {...p.params} durationInFrames={p.durationInFrames} fps={p.fps} width={p.width} height={p.height} words={p.words} mediaSrc={p.mediaSrc} media={p.media} /> : null;
 }
 
-export function AssetView({ a, def, lib, reg = null, src = {}, words = [] }: {
-  a: AssetInstance; def?: AssetDef; lib: Library | null; reg?: Registry | null; src?: Record<string, string>; words?: AssetProps["words"];
+export function AssetView({ a, def, lib, reg = null, src = {}, kinds = {}, words = [] }: {
+  a: AssetInstance; def?: AssetDef; lib: Library | null; reg?: Registry | null; src?: Record<string, string>; kinds?: Record<string, string>; words?: AssetProps["words"];
 }) {
   const frame = useCurrentFrame();
   const tokens = lib?.template?.tokens ?? {};
@@ -250,9 +263,15 @@ export function AssetView({ a, def, lib, reg = null, src = {}, words = [] }: {
   const tree: Element[] = def?.tree ?? [{ type: "text", text: String(params.text ?? params.title ?? "Teks"), size: 72, weight: 700, color: "#fff" }];
   const w = num(def?.layout.w), h = num(def?.layout.h);
   const code = codeAsset(def, reg);
+  // Slot media elemen: tiap param bertipe media menunjuk media proyek (foto atau video) yang URL-nya ada di `src`.
+  const media: NonNullable<AssetProps["media"]> = {};
+  for (const [k, pd] of Object.entries(def?.params ?? {})) {
+    const u = pd.type === "media" ? src[String(params[k] ?? "")] : undefined;
+    if (u) media[k] = { src: u, kind: kinds[String(params[k])] === "image" ? "image" : "video" };
+  }
   const mediaKey = def && Object.entries(def.params).find(([, p]) => p.type === "media")?.[0];
   const body = code
-    ? code({ params, durationInFrames: a.duration, fps, width: w ?? 1080, height: h ?? 1080, words, mediaSrc: mediaKey ? src[String(params[mediaKey] ?? "")] : undefined })
+    ? code({ params, durationInFrames: a.duration, fps, width: w ?? 1080, height: h ?? 1080, words, media, mediaSrc: mediaKey ? src[String(params[mediaKey] ?? "")] : undefined })
     : tree.map((el, i) => <El key={i} el={el} ctx={ctx} root order={i > 0 ? i - 1 : undefined} />);
   return (
     <div data-asset-id={a.id} style={{
@@ -544,7 +563,8 @@ export function AnimPreview({ preset, dir, width, height }: { preset: string; di
 }
 
 /** Pratinjau satu aset di panel Aset (thumbnail): latar netral, aset di tengah. */
-export function AssetPreview({ def, lib, width, height, reg = null }: { def: AssetDef; lib: Library | null; width: number; height: number; reg?: Registry | null; [k: string]: unknown }) {
+export function AssetPreview({ def, lib, width, height, reg = null, packs }: { def: AssetDef; lib: Library | null; width: number; height: number; reg?: Registry | null; packs?: PackInfo[]; [k: string]: unknown }) {
+  usePacksLoaded(packs);
   const { fps } = useVideoConfig();
   // Aset kode digambar utuh: diperkecil supaya kotaknya muat di thumbnail.
   const bw = typeof def.layout.w === "number" ? def.layout.w : width, bh = typeof def.layout.h === "number" ? def.layout.h : height;
@@ -563,3 +583,4 @@ export function AssetPreview({ def, lib, width, height, reg = null }: { def: Ass
 }
 
 export { loadSkillRegistry, skillAssetDefs, type Registry } from "./skill.tsx";
+export { setActivePacks, type PackInfo } from "./packs.tsx";

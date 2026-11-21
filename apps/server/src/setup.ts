@@ -22,7 +22,7 @@ export const setup: { steps: SetupStep[]; running: boolean } = {
     { id: "ffmpeg", label: "Pengolah video (ffmpeg)", state: "menunggu", progress: 0 },
     { id: "whisper", label: "Penulis transkrip (whisper)", state: "menunggu", progress: 0 },
     { id: "model", label: "Model bahasa transkrip", state: "menunggu", progress: 0 },
-    { id: "assets", label: "Aset bawaan (SFX, font, Clip Minimalist)", state: "menunggu", progress: 0 },
+    { id: "assets", label: "Aset bawaan (SFX, font)", state: "menunggu", progress: 0 },
     { id: "chrome", label: "Mesin ekspor (Chrome Headless)", state: "menunggu", progress: 0 },
     { id: "python", label: "Mesin skrip skill (Python, OpenCV, ONNX)", state: "menunggu", progress: 0 },
     { id: "vision", label: "Model wajah dan matte subjek", state: "menunggu", progress: 0 },
@@ -141,3 +141,25 @@ export function ensureSetup(onChange: () => void = () => {}): Promise<void> {
   return current;
 }
 
+
+/** Ringkasan untuk user setelah pemasangan: apa yang sudah siap, apa yang masih perlu dikerjakan sendiri, dan cara memulai. */
+export function nextSteps(): string[] {
+  const st = (id: SetupStep["id"]) => setup.steps.find((x) => x.id === id);
+  const todo: string[] = [];
+  const bad = (id: SetupStep["id"]) => st(id)?.state !== "siap";
+  if (bad("ffmpeg")) todo.push(process.platform === "win32" ? "Pengolah video (ffmpeg) belum siap → jalankan: cz install" : "Pasang ffmpeg lewat paket sistem (brew install ffmpeg / apt install ffmpeg), lalu: cz doctor");
+  if (bad("whisper") || bad("model")) todo.push("Transkrip lokal (whisper + model) belum siap → jalankan: cz install");
+  if (bad("assets")) todo.push("Aset bawaan (SFX transisi, font) belum terpasang → jalankan: cz install (SFX butuh ffmpeg)");
+  if (bad("chrome")) todo.push("Mesin ekspor (Chrome Headless) belum siap → jalankan: cz install (butuh internet sekali)");
+  if (bad("python") || bad("vision")) todo.push("Deteksi wajah dan potongan subjek belum aktif. Pasang Python 3.10 sampai 3.13 (python.org, centang Add to PATH), lalu: cz install. Fitur lain tetap jalan");
+  const c = st("claude");
+  if (c?.state !== "siap") todo.push("Fitur AI (opsional): pasang Claude Code dengan `npm install -g @anthropic-ai/claude-code`, jalankan `claude` sekali untuk login (butuh langganan Pro/Max). Tanpa itu, semua fitur non-AI tetap jalan");
+  else if (c.note) todo.push("Fitur AI (opsional): Claude Code sudah terpasang, tinggal login: jalankan `claude` sekali");
+  return [
+    todo.length ? "CZ Studio terpasang. Yang masih perlu Anda lakukan:" : "CZ Studio terpasang dan semua alat siap.",
+    ...todo.map((t, i) => `  ${i + 1}. ${t}`),
+    "",
+    "Mulai: ketik `cz` lalu Enter (membuka CZ Studio di browser).",
+    "Cek kesiapan kapan saja: `cz doctor`.",
+  ];
+}

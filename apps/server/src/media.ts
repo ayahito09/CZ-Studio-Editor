@@ -6,6 +6,7 @@ import { basename, extname, isAbsolute, join } from "node:path";
 import { PEAKS_PER_SEC, thumbPlan, type Media } from "@cz/core";
 import { toolBin } from "./config.ts";
 
+export const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"]);
 export const VIDEO_EXT = new Set([".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts", ".m2ts", ".mpg", ".mpeg", ".wmv", ".flv", ".3gp"]);
 const exists = (p: string) => access(p).then(() => true, () => false);
 
@@ -79,6 +80,15 @@ const rate = (s: unknown) => {
 };
 
 /** Metadata lewat ffprobe JSON. Hanya field dasar yang dipakai supaya ffprobe versi minimal pun cukup. */
+/** Foto untuk slot elemen: hanya ukuran; durasi/fps/audio isian (media gambar tidak masuk timeline). */
+export async function probeImage(file: string) {
+  const json = JSON.parse(await run("ffprobe", ["-v", "error", "-show_streams", "-of", "json", file]));
+  const v = (json.streams ?? []).find((s: Record<string, unknown>) => s.codec_type === "video");
+  const width = Number(v?.width), height = Number(v?.height);
+  if (!(width > 0 && height > 0)) throw new Error("Gambar tidak terbaca");
+  return { duration: 1, width, height, fps: 30, hasAudio: false };
+}
+
 export async function probe(file: string) {
   const json = JSON.parse(await run("ffprobe", ["-v", "error", "-show_format", "-show_streams", "-of", "json", file]));
   const streams: Record<string, unknown>[] = json.streams ?? [];
@@ -103,14 +113,19 @@ export async function renderSource(folder: string, m: Media, onProgress?: (frac:
   const src = mediaFile(folder, m);
   const codec = (await run("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", src])).trim();
   if (codec === "h264" && extname(src).toLowerCase() === ".mp4") return src;
-  const out = join(folder, "proxy", `${m.id}.render.mp4`);
+  // v2: keyframe rapat. Versi lama (`<id>.render.mp4`, GOP x264 bawaan 250 frame) membuat Remotion mendekode ratusan frame per permintaan
+  // frame sehingga "delayRender … was called but not cleared after 28000ms" pada video 60 fps; berkasnya dibuang agar tidak memakan ruang.
+  const out = join(folder, "proxy", `${m.id}.render2.mp4`);
   if (await exists(out)) return out;
   await mkdir(join(folder, "proxy"), { recursive: true });
+  await rm(join(folder, "proxy", `${m.id}.render.mp4`), { force: true });
   const tmp = out + ".tmp.mp4";
   await run("ffmpeg", [
     "-y", "-v", "error", "-nostdin", "-i", src, "-progress", "pipe:1", "-nostats",
     "-r", String(Math.round(m.fps) || 30), "-fps_mode", "cfr",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
+    // Keyframe tiap ±0,5 dtk: pencarian frame cepat bagi OffthreadVideo (kualitas sama pada CRF yang sama).
+    "-g", String(Math.max(12, Math.round((Math.round(m.fps) || 30) / 2))), "-keyint_min", "12", "-sc_threshold", "0",
     ...(m.hasAudio ? ["-c:a", "aac", "-b:a", "256k"] : ["-an"]),
     "-movflags", "+faststart", tmp,
   ], (chunk) => {
@@ -136,6 +151,7 @@ export class MediaJobs {
   /** Menjadwalkan media yang hasil olahannya belum lengkap. */
   async ensure(media: Media[]) {
     for (const m of media) {
+      if (m.kind === "image") { this.status.set(m.id, { stage: "siap", progress: 1 }); continue; } // foto: tanpa proxy/thumbnail/audio
       if (this.status.has(m.id) && this.status.get(m.id)!.stage !== "gagal") continue;
       const d = derived(this.folder, m);
       if ((await exists(d.proxy)) && (await exists(d.thumbs)) && (!m.hasAudio || (await exists(d.peaks)))) {
@@ -214,7 +230,7 @@ export class MediaJobs {
 /** Menulis stream upload ke folder media dengan nama unik. */
 export async function saveUpload(folder: string, name: string, body: NodeJS.ReadableStream): Promise<string> {
   const ext = extname(name).toLowerCase();
-  if (!VIDEO_EXT.has(ext)) throw new Error(`Format ${ext || "tanpa ekstensi"} tidak didukung (MP4, MOV, MKV, WebM, AVI, MTS, MPG, WMV, FLV, 3GP)`);
+  if (!VIDEO_EXT.has(ext) && !IMAGE_EXT.has(ext)) throw new Error(`Format ${ext || "tanpa ekstensi"} tidak didukung (video: MP4, MOV, MKV, WebM, AVI, MTS, MPG, WMV, FLV, 3GP; foto: JPG, PNG, WebP, GIF)`);
   await mkdir(join(folder, "media"), { recursive: true });
   let rel = join("media", safeName(name));
   for (let i = 2; await exists(join(folder, rel)); i++) rel = join("media", `${basename(safeName(name), ext)} (${i})${ext}`);

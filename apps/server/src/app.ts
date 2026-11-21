@@ -2,12 +2,13 @@ import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { BUILTIN_ASSETS, DEFAULT_SILENCE, isServerOnly, type Op, type Project, type SilenceOptions } from "@cz/core";
+import { DEFAULT_SILENCE, isServerOnly, type Op, type Project, type SilenceOptions } from "@cz/core";
+import { listPacks, packDefs, packFile } from "./packs.ts";
 import { skillCompositionIds } from "./skillScripts.ts";
-import { BUILTIN_PREFIX, builtinFile } from "./builtin.ts";
+import { BUILTIN_PREFIX, builtinFile, builtinSfxRoles, sfxFile } from "./builtin.ts";
 import { checkClaude, claudeStatus, logoutClaude, openLogin, writeMcpConfig } from "./claude.ts";
 import { config, getSettings, libraryPath, setSettings } from "./config.ts";
-import { derived, killAll, mediaFile, safeName, saveUpload, VIDEO_EXT } from "./media.ts";
+import { derived, IMAGE_EXT, killAll, mediaFile, safeName, saveUpload, VIDEO_EXT } from "./media.ts";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
@@ -140,7 +141,7 @@ export async function startServer(opts: Options) {
     const s = await Session.create(folder, title || basename(folder));
     const sk = b.skill as { id?: unknown; version?: unknown } | undefined;
     if (sk && typeof sk.id === "string") {
-      await loadLibrary(sk.id, Number(sk.version)).catch(() => { throw bad("Gaya edit tidak ditemukan"); });
+      await loadLibrary(sk.id, Number(sk.version)).catch(() => { throw bad("Skill tidak ditemukan"); });
       const err = s.apply({ type: "setSkill", skill: { id: sk.id, version: Number(sk.version) } });
       if (err) throw bad(err);
     }
@@ -228,9 +229,11 @@ export async function startServer(opts: Options) {
   app.put("/api/media/upload", async (req) => {
     const s = needSession();
     const name = String((req.query as { name?: unknown }).name ?? "");
+    // slot=1: untuk slot elemen (tidak ditaruh di timeline); balasan memuat id media barunya.
+    const slot = (req.query as { slot?: unknown }).slot === "1";
     const rel = await saveUpload(s.folder, name, req.body as NodeJS.ReadableStream);
-    await s.importMedia(rel, false);
-    return state();
+    const m = await s.importMedia(rel, false, !slot);
+    return { ...state(), mediaId: m.id };
   });
   // Impor dari path di disk: disalin ke folder proyek, atau ditautkan saja (link=true) untuk file besar.
   app.post("/api/media/import", async (req) => {
@@ -242,7 +245,7 @@ export async function startServer(opts: Options) {
       const p = typeof raw === "string" ? raw.trim().replace(/^"|"$/g, "") : "";
       try {
         if (!isAbsolute(p)) throw new Error("tulis lokasi lengkap");
-        if (!VIDEO_EXT.has(extname(p).toLowerCase())) throw new Error("format tidak didukung");
+        if (!VIDEO_EXT.has(extname(p).toLowerCase()) && !IMAGE_EXT.has(extname(p).toLowerCase())) throw new Error("format tidak didukung");
         if (!existsSync(p)) throw new Error("file tidak ditemukan");
         await s.importMedia(link === true ? resolve(p) : await saveUpload(s.folder, basename(p), createReadStream(p)), link === true);
       } catch (e) { errors.push(`${basename(p) || "(kosong)"}: ${(e as Error).message}`); }
@@ -255,7 +258,8 @@ export async function startServer(opts: Options) {
     const { id, kind } = req.params as { id: string; kind: string };
     const m = s.history.project.media.find((x) => x.id === id);
     if (!m || !["proxy", "thumbs", "peaks", "subject"].includes(kind)) return reply.code(404).send({ error: "tidak ada" });
-    const file = kind === "subject" ? join(skillDataDir(s.folder, m.id), "subject.webm") : derived(s.folder, m)[kind as "proxy" | "thumbs" | "peaks"];
+    // Foto tidak punya proxy/thumbnail: pratinjau dan panel memakai file aslinya.
+    const file = m.kind === "image" ? mediaFile(s.folder, m) : kind === "subject" ? join(skillDataDir(s.folder, m.id), "subject.webm") : derived(s.folder, m)[kind as "proxy" | "thumbs" | "peaks"];
     if (!existsSync(file)) return reply.code(404).send({ error: "belum siap" });
     return reply.header("cache-control", "no-cache").sendFile(basename(file), dirname(file));
   });
@@ -331,7 +335,7 @@ export async function startServer(opts: Options) {
     if (typeof text !== "string" || text.length > 20_000) throw bad("teks terlalu panjang");
     if (action === "ask" && !text.trim()) throw bad("Tulis permintaan dulu");
     const sk = s.history.project.skill;
-    // Gaya edit dipakai lewat komposisi kode saja: bila skill proyek belum punya, Claude menulisnya dulu (antrean berurutan).
+    // Skill dipakai lewat komposisi kode saja: bila skill proyek belum punya, Claude menulisnya dulu (antrean berurutan).
     if (sk && ["generate-skill", "generate-component", "edit-skill"].includes(action as string)) {
       s.claude.enqueue(...(action === "edit-skill" ? await s.prepareEdit(sk, text) : await s.prepareComponent(sk, text)));
       return state();
@@ -380,11 +384,11 @@ export async function startServer(opts: Options) {
   app.get("/api/skills", async () => listSkills());
   app.post("/api/skills/add", async (req) => {
     const p = body(req).path;
-    if (typeof p !== "string" || !p.trim()) throw bad("Tulis lokasi folder gaya edit atau file .zip / .skill / .plugin / .md");
+    if (typeof p !== "string" || !p.trim()) throw bad("Tulis lokasi folder skill atau file .zip / .skill / .plugin / .md");
     const meta = await addSkill(p);
     return { meta, skills: await listSkills() };
   });
-  // Seret-lepas folder, .zip, .skill, atau .plugin gaya edit dari browser: file diunggah satu per satu ke folder sementara, lalu dipasang.
+  // Seret-lepas folder, .zip, .skill, atau .plugin skill dari browser: file diunggah satu per satu ke folder sementara, lalu dipasang.
   const skillUploads = new Map<string, string>();
   app.put("/api/skills/upload", async (req) => {
     const { batch, path } = req.query as { batch?: string; path?: string };
@@ -423,6 +427,25 @@ export async function startServer(opts: Options) {
     const lib = await loadLibrary(id, Number(v));
     return { ...lib, meta: await getMeta(id), inventory: await inventory(id, Number(v)) };
   });
+  // Paket elemen lokal milik developer: daftar (katalog + alamat modul) dan modulnya.
+  app.get("/api/packs", async () => (await listPacks()).map((p) => ({ ...p, url: `/api/packs/${p.id}/pack.js` })));
+  app.get("/api/packs/:id/pack.js", async (req, reply) => {
+    const f = packFile(String((req.params as { id: string }).id));
+    if (!f || !existsSync(f)) return reply.code(404).send({ error: "tidak ada" });
+    const origin = req.headers.origin;
+    if (origin && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) reply.header("access-control-allow-origin", origin).header("vary", "origin");
+    return reply.header("cache-control", "no-cache").type("text/javascript").sendFile(basename(f), dirname(f));
+  });
+  // SFX bawaan CZ (tanpa skill): daftar peran yang berkasnya ada, dan berkasnya untuk pratinjau dan render.
+  app.get("/api/builtin/sfx", async () => ({ roles: await builtinSfxRoles() }));
+  app.get("/api/builtin/sfx/:file", async (req, reply) => {
+    const role = String((req.params as { file: string }).file).replace(/\.wav$/, "");
+    const f = (await builtinSfxRoles()).includes(role) ? sfxFile(role) : "";
+    if (!f || !existsSync(f)) return reply.code(404).send({ error: "tidak ada" });
+    const origin = req.headers.origin;
+    if (origin && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) reply.header("access-control-allow-origin", origin).header("vary", "origin");
+    return reply.header("cache-control", "max-age=3600").sendFile(basename(f), dirname(f));
+  });
   app.get("/api/skills/:id/:v/file/*", async (req, reply) => {
     const { id, v } = req.params as { id: string; v: string };
     const rel = decodeURIComponent((req.params as { "*": string })["*"]);
@@ -439,8 +462,8 @@ export async function startServer(opts: Options) {
     const dir = versionDir(id, Number(v));
     if (!existsSync(dir)) throw bad("versi skill tidak ada");
     const text = String(body(req).text ?? "");
-    // Gaya edit = komposisi Remotion (kode) di atas mesin "cz-motion"; tidak ada lagi template/aset JSON.
-    if (hasComponent(id, Number(v)) && !text.trim()) throw bad("Mesin gaya edit ini sudah siap. Pakai Ubah gaya edit untuk mengubahnya.");
+    // Skill = komposisi Remotion (kode) di atas mesin "cz-motion"; tidak ada lagi template/aset JSON.
+    if (hasComponent(id, Number(v)) && !text.trim()) throw bad("Mesin skill ini sudah siap. Pakai Ubah skill untuk mengubahnya.");
     s.claude.enqueue(...(hasComponent(id, Number(v)) ? await s.prepareEdit({ id, version: Number(v) }, text) : await s.prepareComponent({ id, version: Number(v) }, text)));
     return state();
   });
@@ -512,11 +535,11 @@ export async function startServer(opts: Options) {
     if (open.length) issues.push(`${open.length} catatan belum selesai`);
     for (const m of p.media) if (p.clips.some((c) => c.mediaId === m.id) && !existsSync(mediaFile(s.folder, m))) issues.push(`File video tidak ditemukan: ${m.name}`);
     const lib = await s.library();
-    if (p.skill && !lib?.component) issues.push("Mesin gaya edit proyek ini belum disiapkan");
-    const defs = new Set([...BUILTIN_ASSETS.map((d) => d.id), ...(lib?.assets.map((d) => d.id) ?? [])]);
+    if (p.skill && !lib?.component) issues.push("Mesin skill proyek ini belum disiapkan");
+    const defs = new Set([...(await packDefs()).map((d) => d.id), ...(lib?.assets.map((d) => d.id) ?? [])]);
     const skillIds = lib?.component ? new Set(await skillCompositionIds(versionDir(lib.id, lib.version))) : new Set<string>();
     const missing = p.assets.filter((a) => a.defId && !defs.has(a.defId) && !(a.defId.startsWith("skill:") && skillIds.has(a.defId.slice(6))));
-    if (missing.length) issues.push(`${missing.length} elemen sudah tidak ada di gaya edit`);
+    if (missing.length) issues.push(`${missing.length} elemen sudah tidak ada di skill`);
     const { width: W, height: H } = p.sequence;
     const out = p.assets.filter((a) => !a.hidden && (a.transform.x < 80 || a.transform.x > W - 80 || a.transform.y < 220 || a.transform.y > H - 400));
     if (out.length) issues.push(`${out.length} elemen keluar dari batas aman`);
@@ -532,7 +555,7 @@ export async function startServer(opts: Options) {
       width: int(b.width, p.sequence.width, 16, 7680), height: int(b.height, p.sequence.height, 16, 7680),
       fps: int(b.fps, p.sequence.fps, 1, 120),
       codec: b.codec === "h265" || b.codec === "prores" ? b.codec : "h264",
-      crf: int(b.crf, 18, 1, 51), normalize: b.normalize !== false, motionBlur: int(b.motionBlur, MOTION_BLUR, 0, 15),
+      crf: int(b.crf, 18, 1, 51), normalize: b.normalize !== false, fast: b.fast === true && b.codec !== "prores", motionBlur: int(b.motionBlur, MOTION_BLUR, 0, 15),
       range: b.range === "inout" || b.range === "scene" ? b.range : "all",
       inFrame: int(b.inFrame, 0, 0, 1e9), outFrame: int(b.outFrame, 0, 0, 1e9), sceneId: typeof b.sceneId === "string" ? b.sceneId : undefined,
       outDir: typeof b.outDir === "string" && b.outDir.trim() ? b.outDir.trim() : undefined,

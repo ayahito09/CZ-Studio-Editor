@@ -16,8 +16,9 @@ export function newAssetFor(ed: Ed, defId: string, start: number, at?: { x: numb
   const def = ed.assetDefs.find((d) => d.id === (defId === FREE_TEXT ? "cz.teks" : defId)) ?? ed.assetDefs[0];
   const base = instantiate(def, ed.lib?.template?.tokens ?? {}, { start, fps: p.sequence.fps, seq: p.sequence });
   // Param video (b-roll) langsung diisi video pertama proyek supaya langsung terlihat bergerak.
-  const media = Object.entries(def.params).find(([, pd]) => pd.type === "media")?.[0];
-  if (media && p.media[0]) base.params = { ...base.params, [media]: p.media[0].id };
+  // Hanya slot "media" (B-roll/video isi) yang langsung diisi video pertama; slot foto (profil, galeri, logo) dibiarkan kosong untuk diunggah.
+  const video = p.media.find((m) => m.kind !== "image");
+  if (def.params.media?.type === "media" && video) base.params = { ...base.params, media: video.id };
   return at ? { ...base, transform: { ...(base.transform ?? { scale: 1, rotation: 0, opacity: 1 }), x: Math.round(at.x), y: Math.round(at.y) } as NewAsset["transform"] } : base;
 }
 
@@ -64,7 +65,7 @@ export function AssetsPanel() {
       <ul className="asset-grid">
         {shown.map((d) => <AssetCard key={d.id} def={d} onAdd={() => addAt(d.id)} />)}
       </ul>
-      {!ed.lib && <p className="hint">Elemen gaya edit (kartu, mockup, ilustrasi khas skill) muncul di sini setelah kamu memilih gaya edit.</p>}
+      {!ed.lib && <p className="hint">Elemen skill (kartu, mockup, ilustrasi khas skill) muncul di sini setelah kamu memilih skill.</p>}
     </aside>
   );
 }
@@ -74,7 +75,7 @@ function AssetCard({ def, onAdd }: { def: AssetDef; onAdd: () => void }) {
   const ed = useEd();
   const [hover, setHover] = useState(false);
   const lib = useMemo(() => (ed.lib ? { template: ed.lib.template, assets: ed.lib.assets, base: ed.lib.base } : null), [ed.lib]);
-  const props = useMemo(() => ({ def, lib, width: 1080, height: 1080, reg: ed.skillReg }), [def, lib, ed.skillReg]);
+  const props = useMemo(() => ({ def, lib, width: 1080, height: 1080, reg: ed.skillReg, packs: ed.packs }), [def, lib, ed.skillReg, ed.packs]);
   const dur = Math.max(30, Math.round((def.duration ?? 3) * 30));
   return (
     <li>
@@ -138,10 +139,10 @@ function SkillBox() {
   const meta = skills?.find((x) => x.id === cur?.id);
   const generated = cur && meta?.generated[cur.version];
 
-  /** Unggah lalu langsung pakai gaya edit itu di proyek ini. */
+  /** Unggah lalu langsung pakai skill itu di proyek ini. */
   const install = async (files: { path: string; file: File }[]) => {
     if (!files.length) return;
-    if (files.length > 3000) { alert("Folder ini terlalu besar untuk gaya edit (lebih dari 3000 file)."); return; }
+    if (files.length > 3000) { alert("Folder ini terlalu besar untuk skill (lebih dari 3000 file)."); return; }
     setProgress("Menyalin…");
     try {
       const r = await uploadSkill(files, (d, t) => setProgress(t > 1 ? `Menyalin ${d} dari ${t} file…` : "Menyalin…"));
@@ -152,7 +153,7 @@ function SkillBox() {
   };
   const fromInput = (list: FileList | null) => install([...(list ?? [])].map((f) => ({ path: f.webkitRelativePath || f.name, file: f })).filter((x) => !skipped(x.path)));
   const generate = async () => {
-    if (!cur || !confirm("Siapkan gaya edit dengan Claude?\nPerkiraan besar pekerjaan: besar (Claude membaca seluruh panduan gaya lalu menulis mesin gaya edit dalam kode: setiap elemen beranimasi, bukan gambar diam).")) return;
+    if (!cur || !confirm("Siapkan skill dengan Claude?\nPerkiraan besar pekerjaan: besar (Claude membaca seluruh panduan gaya lalu menulis mesin skill dalam kode: setiap elemen beranimasi, bukan gambar diam).")) return;
     ed.setClaudeOpen(true);
     await ed.run(() => api.generateSkill(cur.id, cur.version));
   };
@@ -160,7 +161,7 @@ function SkillBox() {
   return (
     <section className="skillbox" aria-labelledby="skill-h">
       <div className="panel__head">
-        <h2 id="skill-h" className="panel__title">Gaya edit</h2>
+        <h2 id="skill-h" className="panel__title">Skill</h2>
       </div>
       <div data-skill-drop className={"skill-drop" + (over ? " is-over" : "")}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setOver(true); } }}
@@ -173,7 +174,7 @@ function SkillBox() {
         {progress ? <span className="skill-drop__busy"><span className="spinner" aria-hidden="true" />{progress}</span> : (
           <>
             <Icon name="upload" />
-            <span title="Folder, .zip, .skill, .plugin, atau .md">Seret gaya edit ke sini</span>
+            <span title="Folder, .zip, .skill, .plugin, atau .md">Seret skill ke sini</span>
             <span className="skill-drop__pick">
               <button type="button" className="link-btn" onClick={() => folderInput.current?.click()}>Pilih folder</button>
               <span aria-hidden="true">·</span>
@@ -184,9 +185,9 @@ function SkillBox() {
         <input ref={folderInput} type="file" hidden {...{ webkitdirectory: "", directory: "" }} onChange={(e) => { fromInput(e.target.files); e.target.value = ""; }} />
         <input ref={zipInput} type="file" accept=".zip,.skill,.plugin,.md" hidden onChange={(e) => { fromInput(e.target.files); e.target.value = ""; }} />
       </div>
-      <select value={cur ? `${cur.id}@${cur.version}` : ""} aria-label="Gaya edit proyek"
+      <select value={cur ? `${cur.id}@${cur.version}` : ""} aria-label="Skill proyek"
         onChange={(e) => { const [id, v] = e.target.value.split("@"); ed.run(() => api.useSkill(id || null, Number(v))); }}>
-        <option value="">Tanpa gaya edit</option>
+        <option value="">Tanpa skill</option>
         {skills?.flatMap((sk) => sk.versions.map((v) => <option key={sk.id + v} value={`${sk.id}@${v}`}>{sk.name}{sk.versions.length > 1 ? ` · versi ${v}` : ""}{sk.generated[v] ? "" : " (belum disiapkan)"}</option>))}
       </select>
       {cur && meta && Math.max(...meta.versions) > cur.version && <p className="hint">Ada versi lebih baru (versi {Math.max(...meta.versions)}). Proyek ini tetap memakai versi {cur.version} sampai kamu menggantinya.</p>}

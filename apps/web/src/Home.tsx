@@ -154,7 +154,7 @@ function NewProject({ g, run }: { g: State; run: Run }) {
         )}
         <input ref={input} type="file" accept="video/*,.mkv,.mov,.avi,.mts,.m2ts,.mpg,.mpeg,.wmv,.flv,.3gp" multiple hidden onChange={(e) => { add(e.target.files ?? []); e.target.value = ""; }} />
       </div>
-      <p className="newcard__note">{files.length ? "Transkrip, potong jeda, dan subtitle berjalan otomatis setelah proyek dibuat." : "Setelah ada video: transkrip, potong jeda, dan subtitle berjalan otomatis."} Gaya edit dipilih di dalam editor.</p>
+      <p className="newcard__note">{files.length ? "Transkrip, potong jeda, dan subtitle berjalan otomatis setelah proyek dibuat." : "Setelah ada video: transkrip, potong jeda, dan subtitle berjalan otomatis."} Skill dipilih di dalam editor.</p>
       {custom ? (
         <label className="newcard__where">
           <span>Simpan di folder</span>

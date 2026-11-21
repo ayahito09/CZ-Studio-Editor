@@ -1,5 +1,6 @@
-// Aset bawaan CZ, dipasang oleh `cz install`: SFX buatan sendiri (disintesis ffmpeg, bebas lisensi),
-// font berlisensi terbuka (OFL), dan gaya edit Clip Minimalist. Semuanya di <data>/builtin, milik user.
+// Aset bawaan CZ, dipasang oleh `cz install`: SFX buatan sendiri (disintesis ffmpeg, bebas lisensi) dan
+// font berlisensi terbuka (OFL), di pustaka milik user. Skill Clip Minimalist dan elemen bergerak TIDAK ikut paket publik
+// (milik developer: private/); skillSource() di bawah hanya memasang skill bawaan bila foldernya ada.
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rename } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";

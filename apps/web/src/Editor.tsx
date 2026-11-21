@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import type { PlayerRef } from "@remotion/player";
-import { BUILTIN_ASSETS, clipEnd, type NewClip, type Op, type Project } from "@cz/core";
-import { loadSkillRegistry, skillAssetDefs, type Registry } from "@cz/composition";
+import { clipEnd, type NewClip, type Op, type Project } from "@cz/core";
+import { loadSkillRegistry, setActivePacks, skillAssetDefs, type PackInfo, type Registry } from "@cz/composition";
 import { api, jobFraction, type AutoStep, type Library, type SessionState, type State } from "./api.ts";
 import { etaSec, fmtElapsed, Progress } from "./Progress.tsx";
 import type { Run } from "./App.tsx";
@@ -51,6 +51,12 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
     api.subjects().then((r) => live && setSubjects(r.subjects)).catch(() => {});
     return () => { live = false; };
   }, [subjTick, s.folder]);
+  // SFX bawaan CZ yang berkasnya ada (dipakai transisi dan elemen walau proyek tanpa skill).
+  const [builtinSfx, setBuiltinSfx] = useState<string[]>([]);
+  useEffect(() => { api.builtinSfx().then((r) => setBuiltinSfx(r.roles)).catch(() => {}); }, [s.folder]);
+  // Paket elemen lokal milik developer (katalog + modul komponen); muncul di panel Elemen bila terpasang.
+  const [packs, setPacks] = useState<PackInfo[]>([]);
+  useEffect(() => { api.packs().then((r) => { setActivePacks(r); setPacks(r); }).catch(() => {}); }, [s.folder]);
   // Komposisi "Aset…" milik skill menjadi aset yang bisa dipasang (isinya dari defaultProps komposisi).
   const [skillReg, setSkillReg] = useState<Registry | null>(null);
   useEffect(() => {
@@ -58,9 +64,9 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
     setSkillReg(null);
     if (lib?.component) loadSkillRegistry(lib.component).then((r) => live && setSkillReg(r)).catch(() => {});
     return () => { live = false; };
-  }, [lib?.component?.url]);
-  const assetDefs = useMemo(() => [...BUILTIN_ASSETS, ...skillAssetDefs(skillReg, project.sequence), ...(lib?.assets ?? [])],
-    [skillReg, lib, project.sequence]);
+  }, [lib?.component?.url, packs]);
+  const assetDefs = useMemo(() => [...packs.flatMap((p) => p.assets), ...skillAssetDefs(skillReg, project.sequence), ...(lib?.assets ?? [])],
+    [packs, skillReg, lib, project.sequence]);
   const fps = project.sequence.fps;
   const playhead = useMemo(() => createStore(0), []);
   const playing = useMemo(() => createStore(false), []);
@@ -76,9 +82,9 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
   const [dropping, setDropping] = useState(false);
   const [help, setHelp] = useState(false);
 
-  const itemIds = useMemo(() => new Set([...project.clips, ...project.assets, ...project.captions, ...project.scenes].map((x) => x.id)), [project]);
+  const itemIds = useMemo(() => new Set([...project.clips, ...project.assets, ...project.captions, ...project.scenes, ...(project.transitions ?? []).map((t) => ({ id: "fx:" + t.at }))].map((x) => x.id)), [project]);
   const ed: Ed = {
-    s, g, project, run, mode, setMode, lib, reloadLib, subjects, reloadSubjects, assetDefs, skillReg, preview, setPreview, claudeOpen, setClaudeOpen,
+    s, g, project, run, mode, setMode, lib, reloadLib, subjects, reloadSubjects, builtinSfx, packs, assetDefs, skillReg, preview, setPreview, claudeOpen, setClaudeOpen,
     op: (op: Op) => run(() => api.op(op)),
     playhead, playing, player,
     seek: (f) => {
@@ -245,7 +251,7 @@ export function Editor({ s, g, run }: { s: SessionState; g: State; run: Run }) {
         onDragEnter={(e) => hasFiles(e) && setDropping(true)}
         onDragOver={(e) => {
           if (!hasFiles(e)) return;
-          // Di atas area gaya edit, file ditangani panel itu; jangan tampilkan ajakan impor video.
+          // Di atas area skill, file ditangani panel itu; jangan tampilkan ajakan impor video.
           const skillArea = !!(e.target as HTMLElement).closest("[data-skill-drop]");
           setDropping(!skillArea);
           if (!skillArea) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }

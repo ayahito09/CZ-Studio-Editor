@@ -8,6 +8,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { normalizeControls, SAFE_ID, validateAssetDef, validateTemplate, type AssetDef, type Element as El, type SkillControlGroup, type Template } from "@cz/core";
 import { BUILTIN_PREFIX, FONTS, SFX, fontFile, sfxFile } from "./builtin.ts";
 import { libraryPath } from "./config.ts";
+import { listPacks } from "./packs.ts";
 
 export interface SkillMeta { id: string; name: string; description: string; source: string; versions: number[]; addedAt: number; /** Folder asal skill (untuk node_modules saat mengompilasi komponen). */ root?: string }
 export interface Inventory { refs: string[]; fonts: string[]; sfx: string[]; images: string[]; presets: string[]; scripts: string[]; other: string[] }
@@ -55,7 +56,7 @@ export async function listSkills(): Promise<(SkillMeta & { generated: Record<num
     if (!e.isDirectory()) continue;
     try {
       const meta = JSON.parse(await readFile(metaFile(e.name), "utf8")) as SkillMeta;
-      // Siap = punya komposisi kode (mesin gaya edit). Template JSON lama tidak dihitung lagi.
+      // Siap = punya komposisi kode (mesin skill). Template JSON lama tidak dihitung lagi.
       out.push({ ...meta, generated: Object.fromEntries(meta.versions.map((v) => [v, !!entryOf(versionDir(meta.id, v))])) });
     } catch { /* folder bukan skill CZ */ }
   }
@@ -125,6 +126,7 @@ export async function buildComponent(id: string, v: number, root?: string): Prom
   const nodePaths = [root, (await getMeta(id).catch(() => null))?.root].filter((x): x is string => !!x)
     .flatMap((r) => [join(r, "remotion", "node_modules"), join(r, "node_modules")]).filter((d) => existsSync(d));
   const out = join(dir, COMPONENT_FILE);
+  const hasPack = (await listPacks()).length > 0;
   await build({
     entryPoints: [entry], outfile: out + ".tmp", absWorkingDir: dir, bundle: true, format: "esm", platform: "browser", target: "es2022",
     jsx: "automatic", nodePaths, logLevel: "silent", legalComments: "none", minify: true,
@@ -133,7 +135,11 @@ export async function buildComponent(id: string, v: number, root?: string): Prom
       name: "cz-shared",
       // Satu salinan react/remotion (milik CZ) untuk skill dan editor; tanpa ini konteks Remotion terpecah.
       setup(b) {
-        b.onResolve({ filter: /^(react|react-dom|remotion|cz-motion|cz-assets)(\/.*)?$/ }, (a) => ({ path: a.path, namespace: "cz-shared" }));
+        // "cz-assets" datang dari paket elemen lokal (milik developer); tanpa paket, build gagal dengan pesan yang bisa ditindaklanjuti Claude.
+        b.onResolve({ filter: /^cz-assets(\/.*)?$/ }, (a) => (hasPack
+          ? { path: a.path, namespace: "cz-shared" }
+          : { errors: [{ text: 'Modul "cz-assets" tidak tersedia di instalasi ini. Bangun elemen dari "cz-motion" (Move, TypeLine, BlurIn, …) dan div/SVG sendiri.' }] }));
+        b.onResolve({ filter: /^(react|react-dom|remotion|cz-motion)(\/.*)?$/ }, (a) => ({ path: a.path, namespace: "cz-shared" }));
         b.onLoad({ filter: /.*/, namespace: "cz-shared" }, (a) => ({
           contents: `const m = globalThis.__czShared && globalThis.__czShared[${JSON.stringify(a.path)}]; if (!m) throw new Error("CZ tidak menyediakan ${a.path}"); module.exports = m;`,
           loader: "js",

@@ -9,4 +9,5 @@ export * from "./skillScene.ts";
 export * from "./skillControls.ts";
 export * from "./camera.ts";
 export * from "./safeEdges.ts";
+export * from "./transitions.ts";
 export * from "./builtinAssets.ts";

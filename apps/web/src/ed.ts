@@ -1,7 +1,7 @@
 import { createContext, useContext, type RefObject } from "react";
 import type { PlayerRef } from "@remotion/player";
 import type { AssetDef, NewClip, Op, Project } from "@cz/core";
-import type { Registry } from "@cz/composition";
+import type { PackInfo, Registry } from "@cz/composition";
 import type { Library, SessionState, State } from "./api.ts";
 import type { Store } from "./store.ts";
 
@@ -38,6 +38,10 @@ export interface Ed {
   reloadLib: () => void;
   /** Video subjek ber-alpha per media (mesin matte CZ) dan daftar media yang sedang dibuatkan. */
   subjects: Record<string, string>; reloadSubjects: () => void;
+  /** Peran SFX bawaan CZ yang berkasnya ada di server. */
+  builtinSfx: string[];
+  /** Paket elemen lokal milik developer (kosong di instalasi publik). */
+  packs: PackInfo[];
   /** Semua aset yang bisa dipasang: bawaan CZ (kode), komposisi "Aset…" skill (kode), lalu aset lama skill. */
   assetDefs: AssetDef[];
   /** Komposisi skill yang sudah dimuat (untuk thumbnail aset skill). */

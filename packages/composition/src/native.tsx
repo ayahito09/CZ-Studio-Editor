@@ -2,7 +2,7 @@
 // pose masuk/keluar aset dan kata caption dengan follow-through, dan masker frame bergerak untuk motion blur render.
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { AbsoluteFill, Html5Audio, Sequence, useCurrentFrame } from "remotion";
-import { skillSegments, type AssetDef, type Project, type Scene } from "@cz/core";
+import { skillSegments, transSfxRole, type AssetDef, type Project, type Scene, type SceneTransition } from "@cz/core";
 import {
   CameraRig, EASE_PRO, camState, clamp01, curve, enter, exit, lerp, pop, tempo, type CamMove, type CamOpts, type K, type Shake,
 } from "./motion/index.ts";
@@ -55,15 +55,26 @@ export function Camera({ project, children }: { project: Project; children: Reac
 
 /* ---------------- transisi scene ---------------- */
 
+/** Sambungan bertransisi: batas scene (transisi scene, tidak untuk scene skill) ditambah transisi dasar proyek di sambungan potongan.
+ *  Scene menang di batasnya sendiri; scene skill memakai transisinya sendiri. */
+export function joinsOf(project: Project): { b: number; t: SceneTransition & { sfx?: string | null }; key: string }[] {
+  const sc = project.scenes;
+  const out: { b: number; t: SceneTransition & { sfx?: string | null }; key: string }[] = sc.flatMap((s, i) => (i > 0 && s.transition && !s.skill && !sc[i - 1].skill ? [{ b: s.start, t: s.transition, key: s.id }] : []));
+  const taken = new Set(sc.slice(1).filter((s) => s.transition).map((s) => s.start));
+  for (const t of project.transitions ?? []) {
+    if (taken.has(t.at) || sc.some((s) => s.skill && t.at >= s.start - 1 && t.at <= s.end)) continue;
+    out.push({ b: t.at, t, key: "t" + t.at });
+  }
+  return out;
+}
+
 /** Gaya lapisan visual saat transisi: paruh pertama di ekor scene sebelumnya (keluar, berakhir di kecepatan puncak),
  *  paruh kedua di kepala scene berikutnya (masuk, mendarat lembut). Scene yang digambar skill memakai transisinya sendiri. */
 export function transitionAt(project: Project, f: number): { style: CSSProperties; flash: number } {
   const k = project.sequence.width / 1080;
-  for (let i = 1; i < project.scenes.length; i++) {
-    const s = project.scenes[i], prev = project.scenes[i - 1];
-    const t = s.transition;
-    if (!t || t.kind === "cut" || t.frames < 2 || s.skill || prev.skill) continue;
-    const half = Math.floor(t.frames / 2), rest = t.frames - half, b = s.start;
+  for (const { b, t } of joinsOf(project)) {
+    if (t.kind === "cut" || t.frames < 2) continue;
+    const half = Math.floor(t.frames / 2), rest = t.frames - half;
     if (f >= b - half && f < b) {
       const p = (t.kind === "zoom" ? EASE_PRO.exitHard : EASE_PRO.exit)(clamp01((f - (b - half) + 1) / half));
       switch (t.kind) {
@@ -88,22 +99,22 @@ export function transitionAt(project: Project, f: number): { style: CSSPropertie
   return { style: {}, flash: 0 };
 }
 
-/** Wajib SFX di setiap gerak besar: transisi scene memakai SFX bawaan CZ (bila ada pustaka skill sebagai sumber berkas). */
-const TRANS_SFX: Record<string, string> = { blur: "woosh", collapse: "woosh", whip: "woosh-besar", zoom: "woosh-besar", flash: "impak" };
-export function TransitionSfx({ project, base }: { project: Project; base: string | null }) {
-  if (!base || project.tracks.find((t) => t.id === "A2")?.muted) return null;
+/** Wajib SFX di setiap gerak besar: bunyi tiap sambungan = sfx entri bila diatur, kalau tidak bunyi bawaan jenis transisinya.
+ *  `urlOf` memberi alamat berkas peran (dari skill atau SFX bawaan CZ); null = berkas tidak ada. */
+export function TransitionSfx({ project, urlOf }: { project: Project; urlOf: (role: string) => string | null }) {
+  if (project.tracks.find((t) => t.id === "A2")?.muted) return null;
   const fps = project.sequence.fps;
   return (
     <>
-      {project.scenes.map((s, i) => {
-        const t = s.transition, prev = project.scenes[i - 1];
-        const role = t && t.frames >= 2 ? TRANS_SFX[t.kind] : undefined;
-        if (!role || !prev || s.skill || prev.skill) return null;
+      {joinsOf(project).map(({ b, t, key }) => {
+        const role = t.sfx !== undefined ? t.sfx : t.frames >= 2 ? transSfxRole(t) : null;
+        const url = role ? urlOf(role) : null;
+        if (!url) return null;
         // puncak woosh jatuh di tengah transisi
-        const from = Math.max(0, s.start - Math.floor(t!.frames / 2) - Math.round(fps * 0.12));
+        const from = Math.max(0, b - Math.floor(t.frames / 2) - Math.round(fps * 0.12));
         return (
-          <Sequence key={s.id} from={from} durationInFrames={fps * 2} layout="none">
-            <Html5Audio src={`${base}__cz/sfx/${role}.wav`} volume={0.6} />
+          <Sequence key={key} from={from} durationInFrames={fps * 2} layout="none">
+            <Html5Audio src={url} volume={0.6} />
           </Sequence>
         );
       })}
@@ -223,12 +234,12 @@ export function motionMask(project: Project, defs: Map<string, AssetDef>): Uint8
     for (const mv of s.camera?.moves ?? []) mark(s.start + mv.at, s.start + mv.at + mv.dur);
     for (const sh of s.camera?.shake ?? []) mark(s.start + sh.at, s.start + sh.at + (sh.dur ?? 8));
     if (i > 0) mark(s.start - 1, s.start + T(16)); // warisan kamera
-    if (s.transition && s.transition.kind !== "cut") mark(s.start - s.transition.frames, s.start + s.transition.frames);
   });
+  for (const { b, t } of joinsOf(project)) if (t.kind !== "cut") mark(b - t.frames, b + t.frames);
   // Gerak di dalam komponen skill tidak diketahui CZ: seluruh rentangnya dianggap bergerak.
   for (const s of skillSegments(project)) mark(s.from, s.from + s.durationInFrames);
   return m;
 }
 
 export const useMotionMask = (project: Project, defs: Map<string, AssetDef>, on: boolean) =>
-  useMemo(() => (on ? motionMask(project, defs) : null), [on, project.assets, project.scenes, project.clips, project.transcript, project.sequence, project.camera, defs]);
+  useMemo(() => (on ? motionMask(project, defs) : null), [on, project.assets, project.scenes, project.clips, project.transcript, project.sequence, project.camera, project.transitions, defs]);

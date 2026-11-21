@@ -48,7 +48,7 @@ export function SceneList() {
       <button className="btn btn--primary" onClick={() => claude("plan")} disabled={!p.transcript.words.length} title={p.transcript.words.length ? "" : "Buat transkrip dulu di tahap Bahan"}>
         <Icon name="wand" />{p.scenes.length ? "Buat ulang rencana dengan Claude" : "Buat rencana dengan Claude"}
       </button>
-      {!p.skill && <p className="hint">Pilih gaya edit di tahap Sunting supaya tiap bagian punya pilihan tampilan.</p>}
+      {!p.skill && <p className="hint">Pilih skill di tahap Sunting supaya tiap bagian punya pilihan tampilan.</p>}
       <ol className="scene-list">
         {p.scenes.map((s, i) => {
           const open = p.notes.filter((n) => n.sceneId === s.id && n.status !== "selesai").length;
@@ -169,7 +169,7 @@ function StyleTab({ s }: { s: Scene }) {
             {pr && <button className="btn btn--sm-text style-row__all" onClick={() => applyAll(o.presetId)} title="Pakai tampilan ini di semua bagian yang tidak dikunci">Terapkan ke semua</button>}
             {pr?.description && <p className="hint">{pr.description}</p>}
             {o.why && <p className="option__why">{o.why}</p>}
-            {!pr && <p className="hint">Tampilan ini tidak ada di gaya edit yang dipakai.</p>}
+            {!pr && <p className="hint">Tampilan ini tidak ada di skill yang dipakai.</p>}
           </div>
         );
       })}
@@ -203,7 +203,7 @@ function CameraBlock({ s }: { s: Scene }) {
 function CustomTab({ s }: { s: Scene }) {
   const ed = useEd();
   const controls = ed.lib?.template?.controls ?? [];
-  if (!controls.length) return <div className="stack"><CameraBlock s={s} /><p className="muted">Gaya edit ini tidak punya pengaturan tambahan.</p></div>;
+  if (!controls.length) return <div className="stack"><CameraBlock s={s} /><p className="muted">Skill ini tidak punya pengaturan tambahan.</p></div>;
   const val = (id: string, d: unknown) => (id in s.custom ? s.custom[id] : d);
   const set = (id: string, v: unknown) => ed.op({ type: "updateScene", id: s.id, changes: { custom: { ...s.custom, [id]: v } } });
   const groups = [...new Set(controls.map((c) => c.group ?? ""))];

@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
-import { applyOp, clipEnd, clipLen, srcToSeq, thumbPlan, type Clip, type Media, type Op, type Project, type Track, type TrackKind } from "@cz/core";
+import { applyOp, clipEnd, clipLen, srcToSeq, thumbPlan, transSfxRole, type Clip, type Media, type Op, type Project, type Track, type TrackKind } from "@cz/core";
 import { mediaUrl, type JobStatus } from "./api.ts";
 import { ASSET_DRAG, newAssetFor } from "./AssetsPanel.tsx";
 import { itemKind, TOOLS, useEd, type Tool } from "./ed.ts";
@@ -768,6 +768,17 @@ function Items({ t, p, ppf }: { t: Track; p: Project; ppf: number }) {
           {a.duration * ppf > 36 && <span className="item__label">{a.defId ? names.get(a.defId) ?? "Elemen" : String(a.params.text ?? "Teks")}</span>}
         </div>
       ))}
+      {t.id === "V1" && (p.transitions ?? []).flatMap((x) => {
+        const role = transSfxRole(x), id = "fx:" + x.at;
+        const pick = (e: RPointerEvent<HTMLButtonElement>) => { e.stopPropagation(); ed.select([id]); ed.seek(x.at); };
+        const who = x.auto ? "otomatis" : "pilihan Anda";
+        return [
+          x.kind !== "cut" && <button key={id + "t"} type="button" className={"fxmark fxmark--trans" + (x.auto ? " is-auto" : "") + (ed.selection.has(id) ? " is-selected" : "")} style={{ left: x.at * ppf }}
+            title={`Transisi ${x.kind} · ${who}\nKlik untuk mengganti`} aria-label={`Transisi ${x.kind}`} onPointerDown={pick}>◆</button>,
+          role && <button key={id + "s"} type="button" className={"fxmark fxmark--sfx" + (x.auto ? " is-auto" : "") + (ed.selection.has(id) ? " is-selected" : "")} style={{ left: x.at * ppf }}
+            title={`Efek suara ${role} · ${who}\nKlik untuk mengganti`} aria-label={`Efek suara ${role}`} onPointerDown={pick}>♪</button>,
+        ];
+      })}
       {cuts.map((c) => {
         const s = srcToSeq(p, c.mediaId, c.srcStart), e = srcToSeq(p, c.mediaId, Math.max(c.srcStart, c.srcEnd - 0.001));
         if (s === null || e === null) return null;

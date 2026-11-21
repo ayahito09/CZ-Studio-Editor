@@ -1,5 +1,6 @@
 import { enablePatches, produceWithPatches, type Patch } from "immer";
 import { FPS_CHOICES, type Clip, type Media, type Project, type Track } from "./project.ts";
+import { syncAutoFx } from "./transitions.ts";
 import {
   anchorSnapshot, claudeBlocked, CONTENT_SERVER_ONLY, contentEnd, reanchor, rescaleContent, runContent, validateContentOp, type ContentOp,
 } from "./content.ts";
@@ -195,8 +196,10 @@ export function describeOp(op: Op): string {
     case "updateNote": return op.changes.status ? `Catatan ${op.changes.status}` : "Ubah catatan";
     case "replyNote": return "Balas catatan";
     case "removeNote": return "Hapus catatan";
-    case "setSkill": return op.skill ? "Ganti gaya edit" : "Lepas gaya edit";
+    case "setSkill": return op.skill ? "Ganti skill" : "Lepas skill";
     case "setCamera": return "Atur kamera";
+    case "setSafe": return "Atur area aman";
+    case "setTransitions": return "Atur transisi";
   }
 }
 
@@ -281,7 +284,7 @@ function run(d: Project, op: Op) {
 /** Op harus sudah lolos validateOp. Melempar OpError bila tidak bisa dikerjakan (track terkunci, dll.). */
 export function applyOp(project: Project, op: Op): readonly [Project, Patch[], Patch[]] {
   const anchors = anchorSnapshot(project);
-  return produceWithPatches(project, (d) => { run(d as Project, op); reanchor(d as Project, anchors); });
+  return produceWithPatches(project, (d) => { run(d as Project, op); reanchor(d as Project, anchors); if ((d as Project).autoFx) syncAutoFx(d as Project); });
 }
 
 export { OpError };

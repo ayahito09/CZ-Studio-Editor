@@ -1,5 +1,6 @@
 import { SafeAreaSection } from "./SafeAreaSection.tsx";
 import { CameraSection } from "./CameraSection.tsx";
+import { FxInspector, TransitionSection } from "./TransitionSection.tsx";
 import { useEffect, useState, type CSSProperties } from "react";
 import { clipLen, FPS_CHOICES, SEQUENCE_PRESETS, type Clip } from "@cz/core";
 import { useEd } from "./ed.ts";
@@ -12,9 +13,10 @@ export function Inspector() {
   const selected = ed.project.clips.filter((c) => ed.selection.has(c.id));
   const asset = ed.project.assets.find((a) => ed.selection.has(a.id));
   const caption = ed.project.captions.find((c) => ed.selection.has(c.id));
+  const fx = ed.project.transitions?.find((t) => ed.selection.has("fx:" + t.at));
   return (
     <aside className="panel inspector" aria-labelledby="insp-h">
-      {asset ? <AssetInspector key={asset.id} a={asset} /> : caption ? <CaptionInspector key={caption.id} c={caption} /> : selected.length === 0 ? <SequenceInspector /> : selected.length === 1 ? <ClipInspector c={selected[0]} /> : <MultiInspector clips={selected} />}
+      {fx && !asset && !caption ? <FxInspector key={fx.at} t={fx} /> : asset ? <AssetInspector key={asset.id} a={asset} /> : caption ? <CaptionInspector key={caption.id} c={caption} /> : selected.length === 0 ? <SequenceInspector /> : selected.length === 1 ? <ClipInspector c={selected[0]} /> : <MultiInspector clips={selected} />}
     </aside>
   );
 }
@@ -147,7 +149,8 @@ function ClipInspector({ c }: { c: Clip }) {
         </button>
       </div>
       {!audio && <CameraSection clips={[c]} />}
-      {!audio && <SafeAreaSection clips={[c]} />}
+      {!audio && <TransitionSection clips={[c]} />}
+      {!audio && <SafeAreaSection />}
     </>
   );
 }
@@ -170,7 +173,8 @@ function MultiInspector({ clips }: { clips: Clip[] }) {
         <button className="btn" onClick={() => ed.op({ type: "deleteClips", clipIds: ids, ripple: false })} title="Delete"><Icon name="trash" />Hapus</button>
       </div>
       <CameraSection clips={clips} />
-      <SafeAreaSection clips={clips} />
+      <TransitionSection clips={clips.filter((c) => c.trackId === "V1")} />
+      <SafeAreaSection />
     </>
   );
 }

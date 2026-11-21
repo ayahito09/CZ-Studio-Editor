@@ -9,7 +9,11 @@ export const EDGE_MODES: { id: EdgeMode; label: string }[] = [
 export const EDGE_DEFAULT: Record<"top" | "bottom", Edge> = {
   top: { mode: "mati", strength: 0.5, size: 0.14 }, bottom: { mode: "mati", strength: 0.5, size: 0.24 },
 };
-const clamp = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+/** Mesin CZ: pelindung gelap + blur setinggi area aman 9:16 di atas dan bawah. */
+export const EDGE_AUTO: Required<SafeEdges> = {
+  top: { mode: "gelap+blur", strength: 0.5, size: EDGE_DEFAULT.top.size }, bottom: { mode: "gelap+blur", strength: 0.5, size: EDGE_DEFAULT.bottom.size },
+};
+const clamp =(v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 
 export function safeEdgesOf(custom: unknown): Record<"top" | "bottom", Edge> {
   const raw = (custom && typeof custom === "object" ? (custom as Record<string, unknown>).safe : null) as Record<string, Record<string, unknown>> | null;

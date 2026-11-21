@@ -4,8 +4,10 @@ import { wordFrames } from "./analysis.ts";
 import {
   CURVES, TRANSITIONS,
   type AssetInstance, type Caption, type CaptionWord, type Cut, type CutKind, type CurveName, type Keyframe, type Note, type NoteStatus, type Project,
-  type Scene, type SceneCamera, type SceneStatus, type Transform, type TransitionKind,
+  type BaseTransition, type Scene, type SceneCamera, type SceneStatus, type Transform, type TransitionKind,
 } from "./project.ts";
+import type { SafeEdges } from "./safeEdges.ts";
+import { defaultAssetSfx } from "./transitions.ts";
 import type { NewAsset } from "./skill.ts";
 import { clipEnd, deleteRange, newId, OpError } from "./timeline.ts";
 
@@ -38,7 +40,9 @@ export type ContentOp =
   | { type: "replyNote"; id: string; by: "claude" | "user"; text: string }
   | { type: "removeNote"; id: string }
   | { type: "setSkill"; skill: { id: string; version: number } | null }
-  | { type: "setCamera"; camera: SceneCamera | null };
+  | { type: "setCamera"; camera: SceneCamera | null }
+  | { type: "setSafe"; safe: SafeEdges | null }
+  | { type: "setTransitions"; transitions: BaseTransition[] };
 
 export const CONTENT_SERVER_ONLY = ["setTranscript", "setSkill"];
 
@@ -257,6 +261,19 @@ export function validateContentOp(op: Record<string, unknown>, p: Project): stri
       return op.skill === null || (isObj(op.skill) && isStr(op.skill.id, 80) && isInt(op.skill.version, 1)) ? null : "skill tidak sah";
     case "setCamera":
       return checkCamera(op.camera === undefined ? "?" : op.camera);
+    case "setSafe":
+      return op.safe === null || (isObj(op.safe) && size(op.safe) < 2000) ? null : "safe harus objek atau null";
+    case "setTransitions": {
+      if (!Array.isArray(op.transitions) || op.transitions.length > 500) return "transitions maks 500";
+      for (const t of op.transitions) {
+        if (!isObj(t) || !isInt(t.at, 0)) return "transisi dasar butuh at ≥ 0 (frame)";
+        const e = checkTransition({ kind: t.kind, frames: t.frames }); if (e) return e;
+        if (t.sfx !== undefined && t.sfx !== null && !isStr(t.sfx, 40)) return "sfx transisi harus nama peran atau null";
+        if (t.auto !== undefined && typeof t.auto !== "boolean") return "auto transisi harus true/false";
+        for (const k of Object.keys(t)) if (!["at", "kind", "frames", "sfx", "auto"].includes(k)) return `field transisi tidak dikenal: ${k}`;
+      }
+      return null;
+    }
     default:
       return undefined;
   }
@@ -377,7 +394,12 @@ export function runContent(d: Project, op: ContentOp): boolean {
       return true;
     case "applyCuts": applyCuts(d, op.cutIds); return true;
     case "addAssets":
-      for (const a of op.assets) d.assets.push(newAsset(d, a, newId(d.assets.map((x) => x.id), "a")));
+      for (const a of op.assets) {
+        const n = newAsset(d, a, newId(d.assets.map((x) => x.id), "a"));
+        // Proyek otomatis: aset bawaan CZ langsung dipasangi bunyi masuk (bisa diganti atau dimatikan di Inspector).
+        if (d.autoFx && !n.sfx.in && !n.sfx.out) n.sfx.in = defaultAssetSfx(n.defId);
+        d.assets.push(n);
+      }
       return true;
     case "updateAsset": {
       const a = findOr(d.assets, op.id, "aset");
@@ -466,6 +488,8 @@ export function runContent(d: Project, op: ContentOp): boolean {
     case "removeNote": d.notes = d.notes.filter((n) => n.id !== op.id); return true;
     case "setSkill": d.skill = op.skill; return true;
     case "setCamera": d.camera = op.camera; return true;
+    case "setSafe": d.safe = op.safe; return true;
+    case "setTransitions": d.transitions = [...op.transitions].sort((a, b) => a.at - b.at); return true;
   }
   return false;
 }

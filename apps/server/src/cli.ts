@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { exec, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,8 @@ const HELP = `CZ Studio
   cz new "<folder>" [--title "<judul>"] [--video "<file>"] [--skill <id>]
                              buat proyek baru
   cz skill add "<folder skill, .zip, .skill, atau .plugin>"
-  cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores]
+  cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores] [--fast]
+                             --fast: penyandian GPU bila ada (draft, lebih cepat)
   cz models install [--model small-q5_1|small|medium|base]
                              unduh model transkrip lokal (whisper.cpp)
   cz install                 pasang semua alat sekaligus: ffmpeg, whisper, model transkrip,
@@ -38,6 +39,7 @@ const { values, positionals } = parseArgs({
     preset: { type: "string" },
     codec: { type: "string" },
     model: { type: "string" },
+    fast: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -53,6 +55,7 @@ if (values.help || (cmd && !COMMANDS.includes(cmd)) || (cmd && needsArg.includes
 const port = Number(values.port);
 if (!Number.isInteger(port) || port < 1 || port > 65535) { console.error("--port harus angka 1-65535"); process.exit(1); }
 const dataDir = resolve(values.data);
+const setupMarker = join(dataDir, ".setup-ok"); // ditulis `cz install` bila semua alat siap
 const { config } = await import("./config.ts");
 config.dataDir = dataDir;
 await (await import("./config.ts")).migrateLibrary();
@@ -89,9 +92,12 @@ async function main() {
     case "setup": {
       // Dipanggil juga oleh postinstall npm: tidak boleh menggagalkan pemasangan.
       if (process.env.CI || process.env.CZ_SKIP_SETUP) { console.log("CZ: pemasangan alat dilewati (CI / CZ_SKIP_SETUP)."); return; }
-      const { ensureSetup, setup } = await import("./setup.ts");
+      const { ensureSetup, nextSteps, setup } = await import("./setup.ts");
       (await import("./consent.ts")).setInteractive(cmd === "install" && !!process.stdin.isTTY);
-      console.log("CZ Studio: memasang semua alat (ffmpeg, whisper, model transkrip, mesin ekspor, mesin skrip skill, model wajah/matte, Claude Code)…");
+      // npm menyembunyikan keluaran postinstall pada pemasangan global, jadi pesan penting ditulis langsung ke terminal user.
+      const fromNpm = process.env.npm_lifecycle_event === "postinstall";
+      const say = (lines: string[]) => { const text = lines.join("\n"); if (!(fromNpm && toTerminal(text))) console.log(text); };
+      say(["", "CZ Studio: memasang alat pendukung (ffmpeg, whisper, model transkrip, mesin ekspor, mesin skrip skill, model wajah/matte; ±650 MB, butuh internet sekali). Mohon tunggu…"]);
       const shown = new Map<string, string>();
       await ensureSetup(() => {
         for (const st of setup.steps) {
@@ -103,6 +109,8 @@ async function main() {
       const failed = setup.steps.filter((x) => x.state === "gagal");
       console.log(failed.length ? `Sebagian belum terpasang. Coba lagi nanti dengan: cz install` : "Semua alat siap.");
       for (const st of setup.steps) if (st.state === "siap" && st.note) console.log(`  Catatan ${st.label}: ${st.note}`);
+      say(["", ...nextSteps()]);
+      if (!failed.length) writeFileSync(setupMarker, new Date().toISOString());
       return;
     }
     case "update": {
@@ -113,6 +121,12 @@ async function main() {
     case "render": return renderCli();
   }
 
+  // npm terbaru bisa memblokir postinstall, jadi pemakai baru belum tentu melihat info pemasangan: tampilkan di jalan pertama.
+  if (!existsSync(setupMarker)) {
+    console.log("CZ Studio: alat pendukung belum diperiksa. CZ akan menyiapkan yang kurang di latar saat dibuka.\n" +
+      "Langkah berikutnya (disarankan, sekali saja):\n  1. Jalankan: cz install   (memasang ffmpeg, whisper, model transkrip, SFX, mesin ekspor; ±650 MB)\n" +
+      "  2. Fitur AI (opsional): npm install -g @anthropic-ai/claude-code, lalu jalankan `claude` untuk login\n  3. Cek kesiapan: cz doctor\n");
+  }
   const { startServer } = await import("./app.ts");
   const server = await startServer({ port, dataDir, webDir, version });
   if (cmd === "open") await server.openFolder(resolve(arg));
@@ -155,7 +169,7 @@ async function renderCli() {
   const codec = values.codec === "h265" || values.codec === "prores" ? values.codec : "h264";
   const job = renderQueue.enqueue(s.folder, p, await s.library(), {
     width: preset?.width ?? p.sequence.width, height: preset?.height ?? p.sequence.height, fps: p.sequence.fps,
-    codec, crf: 18, normalize: true, range: "all",
+    codec, crf: 18, normalize: true, range: "all", fast: values.fast && codec !== "prores",
   });
   const tick = setInterval(() => {
     const j = renderQueue.jobs.find((x) => x.id === job.id)!;
@@ -166,6 +180,14 @@ async function renderCli() {
   console.log(done.state === "selesai" ? `\nSelesai: ${done.output}` : `\nRender ${done.state}: ${done.error ?? ""}`);
   await server.close();
   process.exit(done.state === "selesai" ? 0 : 1);
+}
+
+/** Tulis langsung ke terminal user (melewati penyembunyian keluaran oleh npm). false bila tidak ada terminal. */
+function toTerminal(text: string): boolean {
+  // Windows: sengaja tidak ada. Membuka "CON" lewat Node bisa membuat berkas bernama CON (bukan konsol) di folder kerja.
+  // Di sana pemakai mendapat info dari `cz install` dan dari jalan pertama `cz`.
+  if (process.platform === "win32") return false;
+  try { const fd = openSync("/dev/tty", "r+"); writeSync(fd, text + "\n"); closeSync(fd); return true; } catch { return false; }
 }
 
 async function doctor() {

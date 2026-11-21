@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
-  assetBox, BUILTIN_ASSETS, buildCaptions, cameraFromContent, CURVES, faceToSeq, instantiate, placementIssues, placementY, SKILL_ASSET, skillAssetDef, skillAssetId, TRANSITIONS, wordFrames,
+  assetBox, buildCaptions, cameraFromContent, CURVES, faceToSeq, instantiate, placementIssues, placementY, SKILL_ASSET, skillAssetDef, skillAssetId, TRANSITIONS, wordFrames,
   type AssetInstance, type Box, type Op, type Project,
 } from "@cz/core";
 import { derived, mediaFile, run } from "./media.ts";
+import { packDefs } from "./packs.ts";
 import { stillFrame, renderQueue } from "./render.ts";
 import type { Session } from "./session.ts";
 import { buildReport, writeSkillFile } from "./skillCode.ts";
@@ -48,7 +49,7 @@ async function faceAt(s: Session, f: number): Promise<Box | null> {
 async function cameraEngine(s: Session) {
   let p = s.history.project;
   // Mesin wajah CZ: pastikan setiap video punya hasil deteksi (dibuat sekali, lalu dipakai ulang).
-  await Promise.all(p.media.filter((m) => m.width > 0).map((m) => detectFaces(s.folder, m).catch(() => false)));
+  await Promise.all(p.media.filter((m) => m.width > 0 && m.kind !== "image").map((m) => detectFaces(s.folder, m).catch(() => false)));
   p = s.history.project;
   const fps = p.sequence.fps, wf = wordFrames(p);
   const faceData = await skillMedia(s.folder, p.media.map((m) => m.id));
@@ -96,7 +97,7 @@ export async function autoBaseCameraOp(s: Session, ranges: [number, number][]): 
  *  Mengembalikan alasan penolakan, atau catatan (boleh kosong) yang ditempel ke hasil. */
 async function checkPlacement(s: Session, a: Pick<AssetInstance, "defId" | "start" | "duration" | "transform">, coverFace: boolean): Promise<{ reject?: string; note: string }> {
   const p = s.history.project, fps = p.sequence.fps;
-  const def = BUILTIN_ASSETS.find((d) => d.id === a.defId);
+  const def = (await packDefs()).find((d) => d.id === a.defId);
   const w = typeof def?.layout.w === "number" ? def.layout.w : p.sequence.width, h = typeof def?.layout.h === "number" ? def.layout.h : p.sequence.height;
   const seen = [...(viewed.get(s) ?? new Map()).entries()].filter(([f, at]) => Date.now() - at < LOOK_FRESH_MS && f >= a.start - fps && f <= a.start + a.duration).map(([f]) => f);
   if (!seen.length) {
@@ -243,7 +244,7 @@ export const TOOLS: Tool[] = [
       const lib = await s.library();
       const skillIds = lib?.component ? (await skillCompositionIds(versionDir(lib.id, lib.version))).filter((id) => SKILL_ASSET.test(id)) : [];
       return json({
-        bawaan: BUILTIN_ASSETS.map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, durationSec: d.duration, params: d.params })),
+        bawaan: (await packDefs()).map((d) => ({ id: d.id, name: d.name, description: d.description, trigger: d.trigger, durationSec: d.duration, params: d.params })),
         skill: skillIds.map((id) => ({ id: skillAssetId(id), komposisi: id, params: "props komposisi ini (lihat defaultProps-nya di kode skill)" })),
         // diTimeline=false: klip yang diimpor tapi belum dipakai = calon B-roll (lihat isinya dengan cz_get_media_frames).
         media: s.history.project.media.map((m) => ({ id: m.id, name: m.name, duration: m.duration, diTimeline: s.history.project.clips.some((c) => c.mediaId === m.id) })),
@@ -256,7 +257,7 @@ export const TOOLS: Tool[] = [
     run: async (s, a) => {
       const p = s.history.project;
       const id = String(a.defId);
-      let def = BUILTIN_ASSETS.find((d) => d.id === id);
+      let def = (await packDefs()).find((d) => d.id === id);
       if (!def && id.startsWith("skill:")) {
         const lib = await s.library();
         const ids = lib?.component ? await skillCompositionIds(versionDir(lib.id, lib.version)) : [];

@@ -43,6 +43,7 @@ export function RenderPanel() {
   const [codec, setCodec] = useState("h264");
   const [crf, setCrf] = useState(18);
   const [normalize, setNormalize] = useState(true);
+  const [fast, setFast] = useState(false);
   const [motionBlur, setMotionBlur] = useState(5);
   const [range, setRange] = useState<"all" | "inout" | "scene">("all");
   const [sceneId, setSceneId] = useState(p.scenes[0]?.id ?? "");
@@ -57,7 +58,7 @@ export function RenderPanel() {
   const dirOk = !outDir.trim() || /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(outDir.trim());
 
   const settings = () => ({
-    width: size.width, height: size.height, fps, codec, crf, normalize, motionBlur, range: range === "inout" && !ioOk ? "all" : range,
+    width: size.width, height: size.height, fps, codec, crf, normalize, fast: fast && codec !== "prores", motionBlur, range: range === "inout" && !ioOk ? "all" : range,
     inFrame: io.in ?? undefined, outFrame: io.out ?? undefined, sceneId: range === "scene" ? sceneId : undefined, outDir: outDir.trim() || undefined,
   });
   const check = async () => { try { setIssues((await api.precheck()).issues); } catch (e) { alert((e as Error).message); } };
@@ -116,6 +117,8 @@ export function RenderPanel() {
         <Seg label="Motion blur" value={motionBlur} onChange={setMotionBlur} options={[
           { v: 0, t: "Mati", hint: "Render paling cepat" }, { v: 5, t: "Halus" }, { v: 9, t: "Maksimal", hint: "Render lebih lama" },
         ]} />
+        <label className="check" title="Memakai penyandian GPU bila tersedia, dengan bitrate tetap. Lebih cepat; kualitas sedikit di bawah mode standar.">
+          <input type="checkbox" checked={fast && codec !== "prores"} disabled={codec === "prores"} onChange={(e) => setFast(e.target.checked)} /><span>Mode cepat (GPU), cocok untuk draft</span></label>
         <label className="check"><input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} /><span>Ratakan volume suara (−14 LUFS, pas untuk media sosial)</span></label>
       </Section>
 
@@ -217,7 +220,7 @@ export function RenderSummary() {
           return (
             <li key={s.id} className="summary-item">
               <button className="link-btn" onClick={() => { ed.seek(s.start); ed.select([s.id]); }}><strong>{i + 1}. {s.title}</strong></button>
-              <span className="muted">Tampilan: {s.skill ? "gaya edit skill" : opt ? presets.find((x) => x.id === opt.presetId)?.name ?? "lainnya" : "belum dipilih"}{edited ? ` · ${edited} elemen diubah` : ""}</span>
+              <span className="muted">Tampilan: {s.skill ? "skill" : opt ? presets.find((x) => x.id === opt.presetId)?.name ?? "lainnya" : "belum dipilih"}{edited ? ` · ${edited} elemen diubah` : ""}</span>
               <span className="muted">{notes.length ? `${notes.filter((n) => n.status === "selesai").length} dari ${notes.length} catatan selesai` : "Tanpa catatan"} · {SCENE_STATUS[s.status]}</span>
             </li>
           );

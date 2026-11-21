@@ -7,10 +7,7 @@ import * as Remotion from "remotion";
 import { continueRender, delayRender, Sequence } from "remotion";
 import { SKILL_ASSET, skillAssetDef, skillSegments, type AssetDef, type Project } from "@cz/core";
 import * as Motion from "./motion/index.ts";
-import * as BaseAssets from "./assets.tsx";
-import * as CleanAssets from "./assetsClean.tsx";
-// "cz-assets" untuk skill: aset bawaan dasar + gaya editorial bersih.
-const Assets = { ...BaseAssets, ...CleanAssets };
+import { ensurePacks } from "./packs.tsx";
 
 export interface SkillComponent { url: string; publicBase: string; sfxLib: Record<string, string[]> | null }
 export interface SkillMediaData { faces?: unknown[]; subject?: string }
@@ -29,8 +26,7 @@ g.__czShared ??= {
   remotion: { ...Remotion, staticFile, getInputProps: () => ({}), registerRoot: (C: React.ComponentType) => { g.__czRoot = C; }, Composition: Marker, Still: Marker },
   // Mesin gerak wajib CZ: satu salinan, jadi motion blur render CZ dan kamera/elemen skill saling mengenali.
   "cz-motion": Motion,
-  // Aset bawaan sebagai fondasi aset skill (ChatMockup, BRoll, KineticTitle, PointCard, CountUp, Notification, Life, Stagger).
-  "cz-assets": Assets,
+  // "cz-assets" (fondasi aset skill) didaftarkan oleh paket elemen lokal saat dimuat (lihat packs.tsx); tanpa paket, modul ini tidak ada.
 };
 
 /** Kumpulkan <Composition id component> dari root skill tanpa merendernya. */
@@ -59,7 +55,7 @@ function load(c: SkillComponent): Promise<Registry> {
   let p = loads.get(c.url);
   if (!p) {
     g.__czStaticBase = c.publicBase;
-    p = importUrl(c.url).then(() => {
+    p = ensurePacks().then(() => importUrl(c.url)).then(() => {
       const out: Registry = {};
       if (g.__czRoot) collect(React.createElement(g.__czRoot), out);
       return out;
