@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, CLAUDE_EFFORTS, CLAUDE_MODELS } from "./api.ts";
 import { useEd } from "./ed.ts";
 import { Icon } from "./icons.tsx";
@@ -7,7 +7,13 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const ed = useEd();
   const ref = useRef<HTMLDialogElement>(null);
   const st = ed.g.settings;
-  useEffect(() => { ref.current?.showModal(); }, []);
+  const [gpu, setGpu] = useState<{ gpus: string[]; nvenc: boolean } | null>(null);
+  useEffect(() => { ref.current?.showModal(); api.gpu().then(setGpu).catch(() => setGpu({ gpus: [], nvenc: false })); }, []);
+  const engines = [
+    { id: "auto", name: "Otomatis", hint: "Gambar dibantu GPU, penyandian CPU. Tercepat di uji CZ." },
+    { id: "gpu", name: "GPU penuh", hint: gpu && !gpu.nvenc ? "NVENC tidak tersedia: penyandian tetap CPU." : "Gambar dan penyandian di GPU (NVENC NVIDIA)." },
+    { id: "cpu", name: "CPU saja", hint: "Tanpa GPU. Pakai bila driver grafis bermasalah." },
+  ];
   return (
     <dialog ref={ref} className="sheet sheet--narrow settings" onClose={onClose} onClick={(e) => e.target === ref.current && ref.current.close()} aria-labelledby="set-h">
       <div className="sheet__head">
@@ -48,6 +54,22 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               <span className="switch__track" aria-hidden="true" />
             </span>
           </label>
+        </section>
+        <section className="settings__group" aria-labelledby="set-render">
+          <h3 id="set-render">Render & ekspor</h3>
+          <fieldset className="settings__models">
+            <legend>Mesin render</legend>
+            {engines.map((m) => (
+              <label key={m.id} className={"settings__model" + ((st.renderEngine ?? "auto") === m.id ? " is-on" : "")}>
+                <input type="radio" name="engine" value={m.id} checked={(st.renderEngine ?? "auto") === m.id} onChange={() => ed.run(() => api.settings({ renderEngine: m.id }))} />
+                <b>{m.name}</b>
+                <small>{m.hint}</small>
+              </label>
+            ))}
+          </fieldset>
+          <p className="hint">
+            {gpu === null ? "Mendeteksi kartu grafis…" : gpu.gpus.length ? `Kartu grafis: ${gpu.gpus.join(", ")}. NVENC: ${gpu.nvenc ? "tersedia" : "tidak tersedia"}.` : "Kartu grafis tidak terdeteksi."}
+          </p>
         </section>
         <section className="settings__group" aria-labelledby="set-tx">
           <h3 id="set-tx">Transkrip</h3>

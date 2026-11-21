@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCaptions, checkCuts, createProject, detectSilences, expandPreset, History, instantiate, missingAssets, SKILL_ASSET, skillAssetDef,
-  assetBox, autoTransitions, EDGE_AUTO, setTransitionsAt, transSfxRole, cameraFromContent, controlValues, controlVisible, faceToSeq, fullScale, nextCustom, normalizeControls, keyWordIndex, placementIssues, placementY, skillSegments, suggestFillers, validateAssetDef, validateTemplate,
+  assetBox, autoTransitions, EDGE_AUTO, filledRange, setTransitionsAt, transSfxRole, cameraFromContent, controlValues, controlVisible, faceToSeq, fullScale, nextCustom, normalizeControls, keyWordIndex, placementIssues, placementY, skillSegments, suggestFillers, validateAssetDef, validateTemplate,
   type AssetDef, type Media, type Template,
 } from "../src/index.ts";
 
@@ -291,6 +291,20 @@ test("area aman dan transisi dasar: bisa diatur tanpa rencana, divalidasi, dan m
   const a = autoTransitions([0, 100, 130, 200, 400], 30);
   assert.deepEqual(a.map((t) => [t.at, t.kind]), [[100, "blur"], [200, "whip"], [400, "blur"]]);
   assert.deepEqual(setTransitionsAt(a, [200], "cut", 30).map((t) => [t.at, t.kind]), [[100, "blur"], [200, "cut"], [400, "blur"]]); // "Potong" tetap tercatat
+});
+
+test("rentang berisi: ekspor tidak ikut ujung kosong (subtitle/suara saja tidak dihitung)", () => {
+  const h = withWords(); // satu klip 10 dtk @30 fps di V1 + A1, subtitle sampai akhir
+  assert.deepEqual(filledRange(h.project), [0, 300]);
+  ok(h, { type: "setCaptions", captions: [{ trackId: "V2", start: 0, end: 300, words: [{ text: "x", start: 0, end: 300 }], style: {}, position: { preset: "bawah" } } as never] });
+  ok(h, { type: "split", frame: 90 });
+  const v2 = h.project.clips.find((c) => c.trackId === "V1" && c.start === 90)!;
+  ok(h, { type: "deleteClips", clipIds: [v2.id], ripple: false }); // video sisa 0-90; suara & subtitle masih sampai 300
+  assert.deepEqual(filledRange(h.project), [0, 90]);
+  ok(h, { type: "addAssets", assets: [{ trackId: "V3", defId: null, start: 120, duration: 30 }] });
+  assert.deepEqual(filledRange(h.project), [0, 150]); // elemen dihitung
+  ok(h, { type: "updateAsset", id: h.project.assets[0].id, changes: { hidden: true } });
+  assert.deepEqual(filledRange(h.project), [0, 90]); // elemen tersembunyi tidak
 });
 
 test("caption: kata kunci = kata pertama bergaya, selain itu kata terpanjang", () => {

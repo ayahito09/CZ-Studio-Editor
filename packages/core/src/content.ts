@@ -536,4 +536,16 @@ export function rescaleContent(p: Project, k: number) {
   for (const n of p.notes as Note[]) n.frame = r(n.frame);
 }
 
+/** Rentang yang benar-benar berisi gambar: klip video aktif dan elemen yang tampil (subtitle atau suara saja tidak dihitung).
+ *  [awal, akhir) dalam frame; null = tidak ada isi. Dipakai ekspor "Semua" supaya ujung kosong tidak ikut dirender. */
+export function filledRange(p: Project): [number, number] | null {
+  const fps = p.sequence.fps;
+  const video = new Set(p.tracks.filter((t) => t.kind === "video").map((t) => t.id));
+  const spans = [
+    ...p.clips.filter((c) => c.enabled && video.has(c.trackId)).map((c) => [c.start, clipEnd(c, fps)]),
+    ...p.assets.filter((a) => !a.hidden).map((a) => [a.start, a.start + a.duration]),
+  ];
+  return spans.length ? [Math.min(...spans.map((s) => s[0])), Math.max(...spans.map((s) => s[1]))] : null;
+}
+
 export const contentEnd = (p: Project) => Math.max(0, ...p.assets.map((a) => a.start + a.duration), ...p.captions.map((c) => c.end));

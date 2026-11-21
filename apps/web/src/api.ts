@@ -15,7 +15,7 @@ export interface RenderJob {
   startedAt?: number; endedAt?: number;
 }
 export interface SetupStep { id: string; label: string; state: "menunggu" | "memeriksa" | "mengunduh" | "siap" | "gagal"; progress: number; note?: string }
-export interface Settings { reviewClaude: boolean; txLang: string; claudeModel: string; claudeEffort: string }
+export interface Settings { reviewClaude: boolean; txLang: string; claudeModel: string; claudeEffort: string; renderEngine?: string }
 /** Pilihan model Claude (sama dengan CLAUDE_MODELS di server). "" = bawaan Claude Code. */
 export const CLAUDE_MODELS = [
   { id: "", name: "Bawaan", hint: "ikut Claude Code" },
@@ -108,6 +108,7 @@ export const api = {
   save: () => post("save"),
   importPaths: (paths: string[], link: boolean) => post("media/import", { paths, link }),
   settings: (s: Partial<Settings>) => post("settings", s),
+  gpu: () => get<{ gpus: string[]; nvenc: boolean }>("gpu"),
   history: () => get<{ done: { label: string; source: string; at: number }[]; undone: number }>("history"),
   // F3
   updateCheck: () => get<{ current: string; latest: string | null; available: boolean }>("update"),

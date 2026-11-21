@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { SEQUENCE_PRESETS } from "@cz/core";
+import { SEQUENCE_PRESETS, filledRange } from "@cz/core";
 import { api, type RenderJob } from "./api.ts";
 import { useClaudeAction } from "./ClaudePanel.tsx";
 import { useEd } from "./ed.ts";
@@ -43,7 +43,6 @@ export function RenderPanel() {
   const [codec, setCodec] = useState("h264");
   const [crf, setCrf] = useState(18);
   const [normalize, setNormalize] = useState(true);
-  const [fast, setFast] = useState(false);
   const [motionBlur, setMotionBlur] = useState(5);
   const [range, setRange] = useState<"all" | "inout" | "scene">("all");
   const [sceneId, setSceneId] = useState(p.scenes[0]?.id ?? "");
@@ -54,11 +53,11 @@ export function RenderPanel() {
   const io = ed.inOut;
   const ioOk = io.in !== null && io.out !== null && io.out > io.in;
   const scene = p.scenes.find((s) => s.id === sceneId);
-  const frames = range === "inout" && ioOk ? io.out! - io.in! : range === "scene" && scene ? scene.end - scene.start : seq.durationFrames;
+  const frames = range === "inout" && ioOk ? io.out! - io.in! : range === "scene" && scene ? scene.end - scene.start : (([a, b]) => b - a)(filledRange(p) ?? [0, 0]);
   const dirOk = !outDir.trim() || /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(outDir.trim());
 
   const settings = () => ({
-    width: size.width, height: size.height, fps, codec, crf, normalize, fast: fast && codec !== "prores", motionBlur, range: range === "inout" && !ioOk ? "all" : range,
+    width: size.width, height: size.height, fps, codec, crf, normalize, motionBlur, range: range === "inout" && !ioOk ? "all" : range,
     inFrame: io.in ?? undefined, outFrame: io.out ?? undefined, sceneId: range === "scene" ? sceneId : undefined, outDir: outDir.trim() || undefined,
   });
   const check = async () => { try { setIssues((await api.precheck()).issues); } catch (e) { alert((e as Error).message); } };
@@ -117,8 +116,6 @@ export function RenderPanel() {
         <Seg label="Motion blur" value={motionBlur} onChange={setMotionBlur} options={[
           { v: 0, t: "Mati", hint: "Render paling cepat" }, { v: 5, t: "Halus" }, { v: 9, t: "Maksimal", hint: "Render lebih lama" },
         ]} />
-        <label className="check" title="Memakai penyandian GPU bila tersedia, dengan bitrate tetap. Lebih cepat; kualitas sedikit di bawah mode standar.">
-          <input type="checkbox" checked={fast && codec !== "prores"} disabled={codec === "prores"} onChange={(e) => setFast(e.target.checked)} /><span>Mode cepat (GPU), cocok untuk draft</span></label>
         <label className="check"><input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} /><span>Ratakan volume suara (−14 LUFS, pas untuk media sosial)</span></label>
       </Section>
 

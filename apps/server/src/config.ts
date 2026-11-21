@@ -14,10 +14,14 @@ export interface Settings {
   claudeModel: string;
   /** Effort untuk `claude -p`: "" = bawaan, atau low | medium | high | xhigh | max. */
   claudeEffort: string;
+  /** Mesin render: auto = gambar frame dibantu GPU (ANGLE) + penyandian CPU; gpu = ANGLE + NVENC; cpu = tanpa GPU. */
+  renderEngine: RenderEngine;
 }
+export type RenderEngine = "auto" | "gpu" | "cpu";
+export const RENDER_ENGINES: RenderEngine[] = ["auto", "gpu", "cpu"];
 export const CLAUDE_MODELS = ["", "opus", "sonnet", "haiku"];
 export const CLAUDE_EFFORTS = ["", "low", "medium", "high", "xhigh", "max"];
-const DEFAULT_SETTINGS: Settings = { reviewClaude: false, txLang: "auto", claudeModel: "", claudeEffort: "" };
+const DEFAULT_SETTINGS: Settings = { reviewClaude: false, txLang: "auto", claudeModel: "", claudeEffort: "", renderEngine: "auto" };
 const settingsFile = () => join(config.dataDir, "settings.json");
 
 /** ffmpeg/ffprobe: salinan yang dipasang CZ di folder data dulu, lalu yang ada di PATH. */
@@ -36,6 +40,7 @@ export async function setSettings(changes: Partial<Settings>): Promise<Settings>
   if (changes.txLang === "auto" || changes.txLang === "id" || changes.txLang === "en") next.txLang = changes.txLang;
   if (typeof changes.claudeModel === "string" && CLAUDE_MODELS.includes(changes.claudeModel)) next.claudeModel = changes.claudeModel;
   if (typeof changes.claudeEffort === "string" && CLAUDE_EFFORTS.includes(changes.claudeEffort)) next.claudeEffort = changes.claudeEffort;
+  if (RENDER_ENGINES.includes(changes.renderEngine as RenderEngine)) next.renderEngine = changes.renderEngine as RenderEngine;
   await mkdir(config.dataDir, { recursive: true });
   await writeFile(settingsFile(), JSON.stringify(next, null, 2));
   return next;

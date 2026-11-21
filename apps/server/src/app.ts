@@ -8,7 +8,7 @@ import { skillCompositionIds } from "./skillScripts.ts";
 import { BUILTIN_PREFIX, builtinFile, builtinSfxRoles, sfxFile } from "./builtin.ts";
 import { checkClaude, claudeStatus, logoutClaude, openLogin, writeMcpConfig } from "./claude.ts";
 import { config, getSettings, libraryPath, setSettings } from "./config.ts";
-import { derived, IMAGE_EXT, killAll, mediaFile, safeName, saveUpload, VIDEO_EXT } from "./media.ts";
+import { derived, IMAGE_EXT, killAll, listGpus, mediaFile, nvencWorks, safeName, saveUpload, VIDEO_EXT } from "./media.ts";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
@@ -221,6 +221,8 @@ export async function startServer(opts: Options) {
     return { done: h.done.map((e) => ({ label: e.label, source: e.source, at: e.at })).slice(-200), undone: h.undone.length };
   });
   app.get("/api/settings", async () => getSettings());
+  // Kartu grafis yang terdeteksi dan apakah NVENC (penyandian GPU NVIDIA) bisa dipakai, untuk pilihan mesin render.
+  app.get("/api/gpu", async () => ({ gpus: await listGpus(), nvenc: await nvencWorks() }));
   app.post("/api/settings", async (req) => { await setSettings(body(req)); return state(); });
 
   // ---------- Media ----------
@@ -555,7 +557,7 @@ export async function startServer(opts: Options) {
       width: int(b.width, p.sequence.width, 16, 7680), height: int(b.height, p.sequence.height, 16, 7680),
       fps: int(b.fps, p.sequence.fps, 1, 120),
       codec: b.codec === "h265" || b.codec === "prores" ? b.codec : "h264",
-      crf: int(b.crf, 18, 1, 51), normalize: b.normalize !== false, fast: b.fast === true && b.codec !== "prores", motionBlur: int(b.motionBlur, MOTION_BLUR, 0, 15),
+      crf: int(b.crf, 18, 1, 51), normalize: b.normalize !== false,  motionBlur: int(b.motionBlur, MOTION_BLUR, 0, 15),
       range: b.range === "inout" || b.range === "scene" ? b.range : "all",
       inFrame: int(b.inFrame, 0, 0, 1e9), outFrame: int(b.outFrame, 0, 0, 1e9), sceneId: typeof b.sceneId === "string" ? b.sceneId : undefined,
       outDir: typeof b.outDir === "string" && b.outDir.trim() ? b.outDir.trim() : undefined,

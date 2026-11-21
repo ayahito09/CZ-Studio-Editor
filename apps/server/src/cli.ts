@@ -13,8 +13,8 @@ const HELP = `CZ Studio
   cz new "<folder>" [--title "<judul>"] [--video "<file>"] [--skill <id>]
                              buat proyek baru
   cz skill add "<folder skill, .zip, .skill, atau .plugin>"
-  cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores] [--fast]
-                             --fast: penyandian GPU bila ada (draft, lebih cepat)
+  cz render "<folder proyek>" [--preset 9:16|1:1|4:5|16:9] [--codec h264|h265|prores] [--gpu|--cpu]
+                             mesin render: bawaan dari Pengaturan; --gpu = NVENC, --cpu = tanpa GPU
   cz models install [--model small-q5_1|small|medium|base]
                              unduh model transkrip lokal (whisper.cpp)
   cz install                 pasang semua alat sekaligus: ffmpeg, whisper, model transkrip,
@@ -39,7 +39,8 @@ const { values, positionals } = parseArgs({
     preset: { type: "string" },
     codec: { type: "string" },
     model: { type: "string" },
-    fast: { type: "boolean", default: false },
+    cpu: { type: "boolean", default: false },
+    gpu: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -169,7 +170,7 @@ async function renderCli() {
   const codec = values.codec === "h265" || values.codec === "prores" ? values.codec : "h264";
   const job = renderQueue.enqueue(s.folder, p, await s.library(), {
     width: preset?.width ?? p.sequence.width, height: preset?.height ?? p.sequence.height, fps: p.sequence.fps,
-    codec, crf: 18, normalize: true, range: "all", fast: values.fast && codec !== "prores",
+    codec, crf: 18, normalize: true, range: "all", engine: values.cpu ? "cpu" : values.gpu ? "gpu" : undefined,
   });
   const tick = setInterval(() => {
     const j = renderQueue.jobs.find((x) => x.id === job.id)!;

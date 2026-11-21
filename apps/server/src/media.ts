@@ -1,5 +1,5 @@
 // Mesin media: probe, proxy, thumbnail strip, dan waveform lewat ffmpeg/ffprobe milik user.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join } from "node:path";
@@ -105,11 +105,29 @@ export async function probe(file: string) {
   return { duration, width, height, fps: Math.round(fps * 1000) / 1000, hasAudio: streams.some((s) => s.codec_type === "audio") };
 }
 
+let gpus: Promise<string[]> | null = null;
+/** Nama kartu grafis di komputer ini (Windows; sistem lain: kosong). Dibaca sekali per proses. */
+export function listGpus(): Promise<string[]> {
+  gpus ??= process.platform !== "win32" ? Promise.resolve([]) : new Promise((resolve) => {
+    execFile("powershell", ["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name"], { windowsHide: true, timeout: 15_000 },
+      (err, out) => resolve(err ? [] : out.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)));
+  });
+  return gpus;
+}
+
+let nvenc: Promise<boolean> | null = null;
+/** Kartu NVIDIA bisa menyandi H.264 lewat NVENC (diuji sekali per proses dengan klip kecil). */
+export function nvencWorks(): Promise<boolean> {
+  nvenc ??= run("ffmpeg", ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"])
+    .then(() => true, () => false);
+  return nvenc;
+}
+
 /**
  * File yang dibaca render: H.264 dengan frame rate tetap, resolusi asli. Remotion gagal ("No frame found at position")
  * pada HEVC / frame rate variabel seperti MOV iPhone. File asli tidak diubah; hasilnya di-cache di folder proxy.
  */
-export async function renderSource(folder: string, m: Media, onProgress?: (frac: number) => void): Promise<string> {
+export async function renderSource(folder: string, m: Media, onProgress?: (frac: number) => void, preferGpu = false): Promise<string> {
   const src = mediaFile(folder, m);
   const codec = (await run("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", src])).trim();
   if (codec === "h264" && extname(src).toLowerCase() === ".mp4") return src;
@@ -120,18 +138,22 @@ export async function renderSource(folder: string, m: Media, onProgress?: (frac:
   await mkdir(join(folder, "proxy"), { recursive: true });
   await rm(join(folder, "proxy", `${m.id}.render.mp4`), { force: true });
   const tmp = out + ".tmp.mp4";
-  await run("ffmpeg", [
+  // Keyframe tiap ±0,5 dtk: pencarian frame cepat bagi OffthreadVideo. GPU (NVENC, kualitas konstan setara CRF 14) bila ada, kalau tidak x264.
+  const gop = String(Math.max(12, Math.round((Math.round(m.fps) || 30) / 2)));
+  const video = (gpu: boolean) => gpu
+    ? ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "16", "-b:v", "0", "-bf", "0", "-g", gop, "-pix_fmt", "yuv420p"]
+    : ["-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p", "-g", gop, "-keyint_min", "12", "-sc_threshold", "0"];
+  const convert = (gpu: boolean) => run("ffmpeg", [
     "-y", "-v", "error", "-nostdin", "-i", src, "-progress", "pipe:1", "-nostats",
-    "-r", String(Math.round(m.fps) || 30), "-fps_mode", "cfr",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
-    // Keyframe tiap ±0,5 dtk: pencarian frame cepat bagi OffthreadVideo (kualitas sama pada CRF yang sama).
-    "-g", String(Math.max(12, Math.round((Math.round(m.fps) || 30) / 2))), "-keyint_min", "12", "-sc_threshold", "0",
+    "-r", String(Math.round(m.fps) || 30), "-fps_mode", "cfr", ...video(gpu),
     ...(m.hasAudio ? ["-c:a", "aac", "-b:a", "256k"] : ["-an"]),
     "-movflags", "+faststart", tmp,
   ], (chunk) => {
     const us = /out_time_us=(\d+)/.exec(chunk.toString());
     if (us) onProgress?.(Math.min(1, Number(us[1]) / 1e6 / m.duration));
-  }).catch(async (e) => { await rm(tmp, { force: true }); throw e; });
+  });
+  const gpu = preferGpu && (await nvencWorks());
+  await convert(gpu).catch((e) => (gpu ? convert(false) : Promise.reject(e))).catch(async (e) => { await rm(tmp, { force: true }); throw e; });
   await rename(tmp, out);
   return out;
 }

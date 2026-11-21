@@ -4,7 +4,7 @@ export { clipLen, clipEnd, newId, type NewClip } from "./timeline.ts";
 export * from "./history.ts";
 export * from "./skill.ts";
 export * from "./analysis.ts";
-export { anchorSnapshot } from "./content.ts";
+export { anchorSnapshot, filledRange } from "./content.ts";
 export * from "./skillScene.ts";
 export * from "./skillControls.ts";
 export * from "./camera.ts";

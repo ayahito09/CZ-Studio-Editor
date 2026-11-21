@@ -5,9 +5,9 @@ import type { OpenGlRenderer } from "@remotion/renderer";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyOp, type Project } from "@cz/core";
-import { config } from "./config.ts";
-import { mediaFile, renderSource, run, safeName } from "./media.ts";
+import { applyOp, filledRange, type Project } from "@cz/core";
+import { config, getSettings, type RenderEngine } from "./config.ts";
+import { mediaFile, nvencWorks, renderSource, run, safeName } from "./media.ts";
 import { builtinSfxRoles } from "./builtin.ts";
 import { listPacks } from "./packs.ts";
 import { subjectFile } from "./faces.ts";
@@ -21,8 +21,8 @@ export interface RenderSettings {
   codec: "h264" | "h265" | "prores";
   crf: number;
   normalize: boolean;
-  /** Mode cepat: penyandian GPU bila ada (bitrate tetap, bukan CRF). Kualitas sedikit di bawah x264, cocok untuk draft. */
-  fast?: boolean;
+  /** Mesin render untuk ekspor ini (CLI --cpu/--gpu); tanpa ini dipakai Pengaturan. */
+  engine?: RenderEngine;
   /** Sampel motion blur shutter per frame bergerak (0 = mati). Bawaan MOTION_BLUR. */
   motionBlur?: number;
   range: "all" | "inout" | "scene";
@@ -42,6 +42,11 @@ export function renderGl(): OpenGlRenderer | null {
   if (e) return e as OpenGlRenderer;
   return process.platform === "win32" ? "angle" : null;
 }
+
+const GPU_ERR = /\bgl\b|angle|gpu|webgl|graphics|context lost|target closed|crash|nvenc|nvcuda|encoder|hardware/i;
+/** Bitrate NVENC setara CRF x264 pilihan user: CRF 18 ≈ 0,2 bit per piksel per frame, tiap −6 CRF ≈ 2× bitrate. */
+export const gpuBitrate = (s: Pick<RenderSettings, "width" | "height" | "fps" | "crf">) =>
+  `${Math.max(4, Math.round((s.width * s.height * s.fps * 0.2 * Math.pow(2, (18 - s.crf) / 6)) / 1e6))}M`;
 
 /** Motion blur wajib di render final: 5 sampel shutter 180° hanya di frame yang bergerak. */
 export const MOTION_BLUR = 5;
@@ -179,21 +184,27 @@ export class RenderQueue {
       if (!sc) throw new Error("Bagian rencana tidak ditemukan");
       from = sc.start; to = sc.end - 1;
     }
+    if (s.range === "all") {
+      // Hanya bagian yang berisi video atau elemen: ujung kosong (mis. subtitle sisa setelah klip dihapus) tidak ikut.
+      const f = filledRange(project);
+      if (!f) throw new Error("Proyek kosong: belum ada klip video atau elemen di timeline");
+      [from, to] = [f[0], f[1] - 1];
+    }
     to = Math.min(to, project.sequence.durationFrames - 1);
-    if (!project.clips.length && !project.assets.length) throw new Error("Proyek kosong: belum ada klip di timeline");
     if (!(to >= from)) throw new Error("Bagian yang diekspor kosong");
     for (const m of project.media) if (!existsSync(mediaFile(job.folder, m)) && project.clips.some((c) => c.mediaId === m.id)) throw new Error(`File video tidak ditemukan: ${m.name}`);
 
     const { r, url } = await prepare((n) => { job.note = n; });
     if ((job.state as RenderState) === "batal") return;
+    const engine = s.engine ?? getSettings().renderEngine;
     const files: Record<string, string> = {};
     for (const m of project.media.filter((x) => project.clips.some((c) => c.mediaId === x.id))) {
       job.note = `Menyiapkan ${m.name} untuk ekspor (sekali saja per video)`;
-      files[m.id] = await renderSource(job.folder, m, (f) => { job.note = `Menyiapkan ${m.name} untuk ekspor · ${Math.round(f * 100)}%`; });
+      files[m.id] = await renderSource(job.folder, m, (f) => { job.note = `Menyiapkan ${m.name} untuk ekspor · ${Math.round(f * 100)}%`; }, engine === "gpu");
       if ((job.state as RenderState) === "batal") return;
     }
     const inputProps = { ...(await renderProps(job.folder, project, snap.lib, false, { width: s.width, height: s.height }, files)), motionBlur: s.motionBlur ?? MOTION_BLUR };
-    const gl = renderGl();
+    const gl = engine === "cpu" ? null : renderGl();
     const composition = await r.selectComposition({ serveUrl: url, id: "cz", inputProps, ...(gl ? { chromiumOptions: { gl } } : {}) });
     const ext = s.codec === "prores" ? "mov" : "mp4";
     const dir = s.outDir ?? join(job.folder, "render");
@@ -211,16 +222,17 @@ export class RenderQueue {
     job.state = "render"; job.note = undefined;
     const t0 = Date.now();
     const concurrency = renderConcurrency();
-    const bitrate = `${Math.max(4, Math.round((s.width * s.height * s.fps * 0.15) / 1e6))}M`;
-    const go = (glMode: OpenGlRenderer | null) => r.renderMedia({
+    // Penyandian GPU (NVENC) hanya di mesin "gpu" dan bila kartu NVIDIA bisa menyandi (diuji sekali); ProRes selalu CPU.
+    const gpu = engine === "gpu" && s.codec !== "prores" && (await nvencWorks());
+    const go = (glMode: OpenGlRenderer | null, useGpu: boolean) => r.renderMedia({
       serveUrl: url, composition, inputProps, outputLocation: raw, cancelSignal, concurrency,
       ...(glMode ? { chromiumOptions: { gl: glMode } } : {}),
       // Bawaan Remotion 30 dtk per pengambilan frame video; footage 1080p 60 fps di komputer yang sibuk bisa lebih lama dari itu.
       timeoutInMilliseconds: 180_000,
       codec: s.codec,
-      // Final: CRF dengan preset fast (kualitas setara medium pada CRF sama, lebih cepat). Cepat: GPU bila ada, bitrate tetap.
       ...(s.codec === "prores" ? { proResProfile: "standard" as const }
-        : s.fast ? { hardwareAcceleration: "if-possible" as const, videoBitrate: bitrate }
+        // NVENC tidak menerima CRF: bitrate setara CRF pilihan user (lihat gpuBitrate).
+        : useGpu ? { hardwareAcceleration: "required" as const, videoBitrate: gpuBitrate(s) }
         : { crf: s.crf, ...(s.codec === "h264" ? { x264Preset: "fast" as const } : {}) }),
       frameRange: [from, to], audioCodec: s.codec === "prores" ? "pcm-16" : "aac", audioBitrate: "192k",
       onProgress: (p) => {
@@ -228,13 +240,14 @@ export class RenderQueue {
         job.eta = p.progress > 0.02 ? Math.round(((Date.now() - t0) / p.progress) * (1 - p.progress) / 1000) : null;
       },
     });
+    job.note = gpu ? "GPU (NVENC)" : gl ? "Gambar GPU, penyandian CPU" : "CPU";
     try {
-      await go(gl);
+      await go(gl, gpu);
     } catch (e) {
-      // Driver GPU yang tidak cocok dengan ANGLE: ulangi sekali dengan mode GL bawaan Chrome (bukan karena dibatalkan user).
-      if (!gl || (job.state as RenderState) === "batal" || !/gl|angle|gpu|webgl|graphics|context lost|target closed|crash/i.test(String((e as Error)?.message))) throw e;
-      job.note = "Mode GPU bermasalah, mengulang dengan mode standar";
-      await go(null);
+      // GPU bermasalah (driver ANGLE atau NVENC): ulangi sekali sepenuhnya di CPU, kecuali dibatalkan user.
+      if ((!gl && !gpu) || (job.state as RenderState) === "batal" || !GPU_ERR.test(String((e as Error)?.message))) throw e;
+      job.note = "GPU bermasalah, mengulang di CPU";
+      await go(null, false);
     }
     if ((job.state as RenderState) === "batal") { await rm(raw, { force: true }); return; }
     if (s.normalize) {
