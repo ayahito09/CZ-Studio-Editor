@@ -2,6 +2,26 @@
   "name": "cz-studio",
   "version": "0.1.0",
   "description": "Editor video lokal untuk konten vertikal. Semua aksi AI lewat Claude Code milik kamu.",
+  "keywords": [
+    "video-editor",
+    "video",
+    "vertical-video",
+    "reels",
+    "tiktok",
+    "shorts",
+    "remotion",
+    "whisper",
+    "subtitles",
+    "local-first",
+    "claude-code"
+  ],
+  "author": "Azmi",
+  "homepage": "https://github.com/ayahito09/CZ-Studio-Editor#readme",
+  "bugs": {
+    "url": "https://github.com/ayahito09/CZ-Studio-Editor/issues"
+  },
+  "repository": "github:ayahito09/CZ-Studio-Editor",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "cz": "dist/cli.js"
@@ -12,8 +32,6 @@
   "engines": {
     "node": ">=20"
   },
-  "repository": "github:ayahito09/CZ-Studio-Editor",
-  "license": "MIT",
   "workspaces": [
     "packages/*",
     "apps/*"

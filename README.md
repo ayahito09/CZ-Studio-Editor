@@ -53,6 +53,8 @@ cz install
 
 Perintah ini memasang ffmpeg dan ffprobe, whisper-cli beserta model transkrip, aset bawaan, mesin ekspor (Chrome Headless), mesin skrip Python dengan modelnya (wajah dan potongan subjek), dan Claude Code. Alat yang sudah ada dilewati, jadi aman dijalankan ulang.
 
+Jalankan langkah ini sendiri. npm versi terbaru memblokir skrip pemasangan secara bawaan, jadi `npm install -g cz-studio` bisa selesai tanpa memasang alat apa pun. Kalau terlewat, CZ juga menyiapkan alat yang kurang di latar saat pertama dibuka.
+
 Dua langkah akan **bertanya dulu** sebelum mengubah komputermu: memasang Python lewat winget (bila belum ada) dan memasang Claude Code secara global lewat npm. Jawab `y` untuk setuju. Pemasangan otomatis lewat `npm install` tidak pernah menyetujuinya sendiri.
 
 **4. Buka CZ.**
