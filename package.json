@@ -1,6 +1,6 @@
 {
   "name": "cz-studio",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Editor video lokal untuk konten vertikal. Semua aksi AI lewat Claude Code milik kamu.",
   "keywords": [
     "video-editor",
